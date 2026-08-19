@@ -87,19 +87,20 @@ Return ONLY valid JSON (no markdown, no code fences) with this exact schema:
   "total_duration": <number - total seconds of the assembled timeline>,
   "timeline": [
     {{
-      "clip_id": "<clip_id from the analysis>",
-      "filename": "<filename>",
+      "clip_id": "<file_path from the clip analysis>",
+      "filename": "<filename portion of the file_path>",
       "start": <start second within the original clip>,
       "end": <end second within the original clip>,
       "position_in_timeline": <start position in the assembled timeline>,
       "transition": "cut"
     }}
   ],
-  "clips_not_used": ["<clip_id>", ...],
+  "clips_not_used": ["<file_path>", ...],
   "clips_not_used_reason": "Brief explanation of why these clips were excluded"
 }}
 
 Rules:
+- IMPORTANT: Use the exact file_path from each clip analysis as the clip_id value
 - timeline segments must be ordered by position_in_timeline
 - position_in_timeline of first segment is 0
 - Each segment's duration = end - start
@@ -217,6 +218,7 @@ def analyze_clip(video_file_path: str, focus: str = "") -> dict:
         }
 
     analysis["status"] = "success"
+    analysis["file_path"] = video_file_path
     analysis["input_tokens"] = input_tokens
     analysis["output_tokens"] = output_tokens
 

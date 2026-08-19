@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@theme {
+  /* Metallic green palette (primary) */
+  --color-green-50: #f0fdf4;
+  --color-green-100: #dcfce7;
+  --color-green-200: #bbf7d0;
+  --color-green-300: #86efac;
+  --color-green-400: #4ade80;
+  --color-green-500: #22c55e;
+  --color-green-600: #16a34a;
+  --color-green-700: #15803d;
+  --color-green-800: #166534;
+  --color-green-900: #14532d;
+
+  /* Gold palette (secondary) */
+  --color-gold-50: #fefce8;
+  --color-gold-100: #fef9c3;
+  --color-gold-200: #fef08a;
+  --color-gold-300: #fde047;
+  --color-gold-400: #d4af37;
+  --color-gold-500: #b8960c;
+  --color-gold-600: #a16207;
+  --color-gold-700: #854d0e;
+  --color-gold-800: #713f12;
+  --color-gold-900: #422006;
+
+  /* Dark background shades */
+  --color-dark-50: #3a3a3a;
+  --color-dark-100: #2d2d2d;
+  --color-dark-200: #252525;
+  --color-dark-300: #1e1e1e;
+  --color-dark-400: #181818;
+  --color-dark-500: #121212;
+  --color-dark-600: #0e0e0e;
+  --color-dark-700: #0a0a0a;
+  --color-dark-800: #060606;
+  --color-dark-900: #030303;
+}
+
+/* Glassmorphism utilities */
+@utility glass {
+  background: rgba(30, 30, 30, 0.35);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+@utility glass-light {
+  background: rgba(45, 45, 45, 0.3);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@utility glass-strong {
+  background: rgba(20, 20, 20, 0.75);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Base styles */
+body {
+  background-color: #0a0a0a;
+  background-image: url('./assets/bg.png');
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  color: #e5e5e5;
+  font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+#root {
+  min-height: 100vh;
+}

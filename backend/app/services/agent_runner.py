@@ -100,6 +100,11 @@ async def run_agent_job(job_id: str, clip_paths: list[str], brief: str, settings
         proposals = []
         switched_to_generating = False
         final_text = ""
+        # Map clip paths to their order for identification
+        clip_path_to_info = {}
+        for i, path in enumerate(clip_paths):
+            filename = Path(path).name
+            clip_path_to_info[path] = {"index": i, "filename": filename}
 
         # Run agent and watch events
         async for event in runner.run_async(

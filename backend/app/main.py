@@ -1,8 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.routers import jobs, clips
 from app.models.schemas import HealthResponse
+from app.config import settings as app_settings
+
+import os
+from pathlib import Path
 
 app = FastAPI(
     title="Ad Cut Agent API",
@@ -18,6 +23,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve uploaded clips as static files at /media/
+uploads_path = Path(app_settings.upload_dir)
+uploads_path.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(uploads_path)), name="media")
 
 # Routers
 app.include_router(jobs.router)
