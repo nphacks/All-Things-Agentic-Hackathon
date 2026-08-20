@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Proposal, TimelineSegment } from "../types";
+import type { Proposal, TimelineSegment, Transition } from "../types";
 import Loader from "./Loader";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8080";
@@ -8,7 +8,6 @@ interface VideoPlayerProps {
   proposal: Proposal | null;
   clipUrls: Record<string, string>;
   onTimeUpdate?: (time: number) => void;
-  /** Direct DOM ref for external playhead element */
   playheadRef?: React.RefObject<HTMLDivElement | null>;
 }
 
@@ -19,13 +18,163 @@ function formatTime(seconds: number): string {
   return `${m}:${remainder.toString().padStart(2, "0")}`;
 }
 
-/**
- * VideoPlayer that pre-loads ALL clip files into separate video elements.
- * During playback, we just show/hide the correct element and seek -- no src changes.
- * This eliminates any loading flash between segments.
- */
+/** Extract transition info */
+function getTransition(segment: TimelineSegment): Transition {
+  if (typeof segment.transition === "object" && segment.transition !== null) {
+    return segment.transition as Transition;
+  }
+  const raw = (typeof segment.transition === "string" ? segment.transition : "cut");
+  return { type: raw as Transition["type"], duration: 0 };
+}
+
+/** Apply transition CSS to outgoing and incoming elements */
+function applyTransitionStyles(
+  outgoing: HTMLVideoElement | null,
+  incoming: HTMLVideoElement | null,
+  overlay: HTMLDivElement | null,
+  type: string,
+  progress: number // 0 to 1
+) {
+  if (!incoming) return;
+
+  switch (type) {
+    case "crossfade":
+      if (outgoing) {
+        outgoing.style.opacity = String(1 - progress);
+        outgoing.style.zIndex = "10";
+      }
+      incoming.style.opacity = String(progress);
+      incoming.style.zIndex = "11";
+      incoming.style.filter = "";
+      incoming.style.clipPath = "";
+      incoming.style.transform = "";
+      break;
+
+    case "fade_to_black":
+    case "fade_to_white": {
+      const color = type === "fade_to_black" ? "black" : "white";
+      if (overlay) {
+        overlay.style.display = "block";
+        overlay.style.backgroundColor = color;
+        if (progress < 0.5) {
+          // First half: fade overlay in, outgoing visible
+          overlay.style.opacity = String(progress * 2);
+          if (outgoing) { outgoing.style.opacity = "1"; outgoing.style.zIndex = "10"; }
+          incoming.style.opacity = "0";
+          incoming.style.zIndex = "9";
+        } else {
+          // Second half: fade overlay out, incoming visible
+          overlay.style.opacity = String((1 - progress) * 2);
+          if (outgoing) { outgoing.style.opacity = "0"; outgoing.style.zIndex = "9"; }
+          incoming.style.opacity = "1";
+          incoming.style.zIndex = "10";
+        }
+      }
+      incoming.style.filter = "";
+      incoming.style.clipPath = "";
+      incoming.style.transform = "";
+      break;
+    }
+
+    case "wipe_left":
+      if (outgoing) { outgoing.style.opacity = "1"; outgoing.style.zIndex = "10"; }
+      incoming.style.opacity = "1";
+      incoming.style.zIndex = "11";
+      incoming.style.clipPath = `inset(0 ${(1 - progress) * 100}% 0 0)`;
+      incoming.style.filter = "";
+      incoming.style.transform = "";
+      break;
+
+    case "wipe_right":
+      if (outgoing) { outgoing.style.opacity = "1"; outgoing.style.zIndex = "10"; }
+      incoming.style.opacity = "1";
+      incoming.style.zIndex = "11";
+      incoming.style.clipPath = `inset(0 0 0 ${(1 - progress) * 100}%)`;
+      incoming.style.filter = "";
+      incoming.style.transform = "";
+      break;
+
+    case "zoom_in":
+      if (outgoing) {
+        const scale = 1 + progress * 0.5;
+        outgoing.style.opacity = String(1 - progress);
+        outgoing.style.transform = `scale(${scale})`;
+        outgoing.style.zIndex = "10";
+      }
+      incoming.style.opacity = String(progress);
+      incoming.style.zIndex = "11";
+      incoming.style.filter = "";
+      incoming.style.clipPath = "";
+      incoming.style.transform = "";
+      break;
+
+    case "blur":
+      if (outgoing) {
+        outgoing.style.filter = `blur(${progress * 10}px)`;
+        outgoing.style.opacity = String(1 - progress);
+        outgoing.style.zIndex = "10";
+      }
+      incoming.style.filter = `blur(${(1 - progress) * 10}px)`;
+      incoming.style.opacity = String(progress);
+      incoming.style.zIndex = "11";
+      incoming.style.clipPath = "";
+      incoming.style.transform = "";
+      break;
+
+    default: // "cut"
+      if (outgoing) { outgoing.style.opacity = "0"; outgoing.style.zIndex = "0"; }
+      incoming.style.opacity = "1";
+      incoming.style.zIndex = "10";
+      incoming.style.filter = "";
+      incoming.style.clipPath = "";
+      incoming.style.transform = "";
+      break;
+  }
+}
+
+/** Reset all styles on a video element */
+function resetVideoStyles(el: HTMLVideoElement) {
+  el.style.opacity = "0";
+  el.style.zIndex = "0";
+  el.style.filter = "";
+  el.style.clipPath = "";
+  el.style.transform = "";
+}
+
+/** Map filter type + intensity to CSS filter string */
+function getFilterCSS(segment: TimelineSegment): string {
+  let css = "";
+
+  // Apply filter if present
+  const filter = segment.filter;
+  if (filter && filter.type !== "none") {
+    const intensity = filter.intensity ?? 1;
+    const pct = intensity * 100;
+
+    switch (filter.type) {
+      case "grayscale": css = `grayscale(${pct}%)`; break;
+      case "sepia": css = `sepia(${pct}%)`; break;
+      case "high_contrast": css = `contrast(${100 + intensity * 50}%) saturate(${100 + intensity * 30}%)`; break;
+      case "warm": css = `sepia(${pct * 0.3}%) saturate(${100 + intensity * 40}%) brightness(${100 + intensity * 5}%)`; break;
+      case "cool": css = `saturate(${100 - intensity * 20}%) hue-rotate(${intensity * 20}deg) brightness(${100 + intensity * 5}%)`; break;
+      case "vintage": css = `sepia(${pct * 0.4}%) saturate(${100 - intensity * 30}%) contrast(${100 + intensity * 10}%)`; break;
+      case "dramatic": css = `contrast(${100 + intensity * 40}%) brightness(${100 - intensity * 15}%) saturate(${100 + intensity * 20}%)`; break;
+    }
+  }
+
+  // Stack brightness adjustment if present
+  const brightness = segment.brightness_adjustment;
+  if (brightness && brightness !== 1.0) {
+    const brightnessCss = `brightness(${brightness})`;
+    css = css ? `${css} ${brightnessCss}` : brightnessCss;
+  }
+
+  return css;
+}
+
 export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playheadRef }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const videosRef = useRef<Map<string, HTMLVideoElement>>(new Map());
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentSegmentIdx, setCurrentSegmentIdx] = useState(0);
@@ -34,14 +183,13 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
   const rafRef = useRef<number | null>(null);
   const isPlayingRef = useRef(false);
   const segmentIdxRef = useRef(0);
-  // Direct DOM refs for smooth updates without re-renders
+  const transitionActiveRef = useRef(false);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const timeDisplayRef = useRef<HTMLSpanElement>(null);
 
   const timeline = proposal?.timeline || [];
   const totalDuration = proposal?.total_duration || 0;
 
-  // Get media URL for a segment
   const getSegmentUrl = useCallback(
     (segment: TimelineSegment): string => {
       if (clipUrls[segment.clip_id]) return clipUrls[segment.clip_id];
@@ -62,7 +210,6 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
     [clipUrls]
   );
 
-  // Get unique clip URLs from the timeline
   const uniqueClipUrls = useCallback((): string[] => {
     const urls = new Set<string>();
     for (const seg of timeline) {
@@ -88,7 +235,6 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
 
     setAllLoaded(false);
 
-    // Remove old elements not needed
     for (const [url, el] of existingMap.entries()) {
       if (!urls.includes(url)) {
         el.pause();
@@ -97,7 +243,6 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
       }
     }
 
-    // Create/reuse elements for each URL
     for (const url of urls) {
       let video = existingMap.get(url);
       if (!video) {
@@ -110,34 +255,26 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
         video.style.height = "100%";
         video.style.objectFit = "contain";
         video.style.opacity = "0";
+        video.style.transition = "none";
         video.src = url;
         container.appendChild(video);
         existingMap.set(url, video);
 
         video.addEventListener("loadeddata", () => {
           loadedCount++;
-          if (loadedCount >= totalToLoad) {
-            setAllLoaded(true);
-          }
+          if (loadedCount >= totalToLoad) setAllLoaded(true);
         }, { once: true });
 
         video.load();
       } else {
-        // Already loaded
         loadedCount++;
-        if (loadedCount >= totalToLoad) {
-          setAllLoaded(true);
-        }
+        if (loadedCount >= totalToLoad) setAllLoaded(true);
       }
     }
 
-    // If all were already cached
-    if (loadedCount >= totalToLoad) {
-      setAllLoaded(true);
-    }
+    if (loadedCount >= totalToLoad) setAllLoaded(true);
   }, [proposal, timeline, uniqueClipUrls]);
 
-  // Show only the video for the current segment
   const showSegment = useCallback(
     (idx: number) => {
       const segment = timeline[idx];
@@ -145,27 +282,33 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
 
       const url = getSegmentUrl(segment);
       const map = videosRef.current;
+      const filterCss = getFilterCSS(segment);
 
-      // Hide all, show current
       for (const [vUrl, el] of map.entries()) {
         if (vUrl === url) {
           el.style.opacity = "1";
           el.style.zIndex = "10";
+          el.style.filter = filterCss;
+          el.style.clipPath = "";
+          el.style.transform = "";
         } else {
-          el.style.opacity = "0";
-          el.style.zIndex = "0";
+          resetVideoStyles(el);
           el.pause();
         }
+      }
+
+      // Hide overlay
+      if (overlayRef.current) {
+        overlayRef.current.style.display = "none";
       }
     },
     [timeline, getSegmentUrl]
   );
 
-  // Stable animation loop via ref (avoids stale closure issues with useCallback)
+  // Tick function ref
   const tickFnRef = useRef<() => void>(() => {});
   const lastStateUpdateRef = useRef(0);
 
-  // Update the tick function on every render (always has fresh closures)
   tickFnRef.current = () => {
     if (!isPlayingRef.current) return;
 
@@ -183,32 +326,25 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
       return;
     }
 
-    // Ensure video is playing
     if (video.paused && isPlayingRef.current) {
       video.play().catch(() => {});
     }
 
-    // Calculate timeline position
     const clipProgress = Math.max(0, video.currentTime - segment.start);
     const timelinePos = segment.position_in_timeline + clipProgress;
     const clamped = Math.max(0, Math.min(timelinePos, totalDuration));
 
-    // Direct DOM updates (smooth, no re-render)
+    // Direct DOM updates
     const pct = totalDuration > 0 ? (clamped / totalDuration) * 100 : 0;
-    if (progressBarRef.current) {
-      progressBarRef.current.style.width = `${pct}%`;
-    }
+    if (progressBarRef.current) progressBarRef.current.style.width = `${pct}%`;
     if (timeDisplayRef.current) {
       const s = Math.floor(clamped);
       const m = Math.floor(s / 60);
       const r = s % 60;
       timeDisplayRef.current.textContent = `${m}:${r.toString().padStart(2, "0")} / ${formatTime(totalDuration)}`;
     }
-    if (playheadRef?.current) {
-      playheadRef.current.style.left = `${pct}%`;
-    }
+    if (playheadRef?.current) playheadRef.current.style.left = `${pct}%`;
 
-    // Update React state less frequently (for Timeline playhead)
     const now = performance.now();
     if (now - lastStateUpdateRef.current > 200) {
       lastStateUpdateRef.current = now;
@@ -216,26 +352,58 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
       if (onTimeUpdate) onTimeUpdate(clamped);
     }
 
-    // Check if segment ended
-    if (video.currentTime >= segment.end - 0.05) {
-      const nextIdx = idx + 1;
-      if (nextIdx < timeline.length) {
-        video.pause();
-        segmentIdxRef.current = nextIdx;
-        setCurrentSegmentIdx(nextIdx);
-        const nextSeg = timeline[nextIdx];
+    // Check for transition start (approaching segment end)
+    const nextIdx = idx + 1;
+    if (nextIdx < timeline.length) {
+      const nextSeg = timeline[nextIdx];
+      const nextTransition = getTransition(nextSeg);
+      const segEnd = segment.end;
+      const transitionDuration = nextTransition.type !== "cut" ? nextTransition.duration : 0;
+
+      // If we're within transition duration of segment end, start transition
+      if (transitionDuration > 0 && video.currentTime >= segEnd - transitionDuration && !transitionActiveRef.current) {
+        transitionActiveRef.current = true;
+        // Start playing incoming clip
         const nextUrl = getSegmentUrl(nextSeg);
         const nextVideo = videosRef.current.get(nextUrl);
         if (nextVideo) {
-          showSegment(nextIdx);
           nextVideo.currentTime = nextSeg.start;
           nextVideo.play().catch(() => {});
         }
-      } else {
+      }
+
+      // Apply transition progress
+      if (transitionActiveRef.current && transitionDuration > 0) {
+        const timeIntoTransition = video.currentTime - (segEnd - transitionDuration);
+        const progress = Math.max(0, Math.min(1, timeIntoTransition / transitionDuration));
+        const nextUrl = getSegmentUrl(nextSeg);
+        const nextVideo = videosRef.current.get(nextUrl) || null;
+        applyTransitionStyles(video, nextVideo, overlayRef.current, nextTransition.type, progress);
+      }
+
+      // Segment boundary
+      if (video.currentTime >= segEnd - 0.05) {
+        video.pause();
+        transitionActiveRef.current = false;
+        segmentIdxRef.current = nextIdx;
+        setCurrentSegmentIdx(nextIdx);
+        showSegment(nextIdx);
+        const nextUrl = getSegmentUrl(nextSeg);
+        const nextVideo = videosRef.current.get(nextUrl);
+        if (nextVideo) {
+          // If transition was playing, it's already at start; otherwise seek
+          if (getTransition(nextSeg).type === "cut" || getTransition(nextSeg).duration === 0) {
+            nextVideo.currentTime = nextSeg.start;
+          }
+          nextVideo.play().catch(() => {});
+        }
+      }
+    } else {
+      // Last segment -- check end
+      if (video.currentTime >= segment.end - 0.05) {
         video.pause();
         isPlayingRef.current = false;
         setIsPlaying(false);
-        // Final state update
         setTimelineTime(totalDuration);
         if (onTimeUpdate) onTimeUpdate(totalDuration);
         return;
@@ -245,7 +413,6 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
     rafRef.current = requestAnimationFrame(() => tickFnRef.current());
   };
 
-  // Start/stop the animation loop
   useEffect(() => {
     if (isPlaying) {
       isPlayingRef.current = true;
@@ -265,12 +432,10 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
     };
   }, [isPlaying]);
 
-  // Play/pause toggle
   const togglePlay = () => {
     if (!proposal || !allLoaded) return;
 
     if (isPlaying) {
-      // Pause current
       const segment = timeline[currentSegmentIdx];
       if (segment) {
         const url = getSegmentUrl(segment);
@@ -279,15 +444,14 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
       }
       setIsPlaying(false);
     } else {
-      // Check if at end -- restart
       const lastSeg = timeline[timeline.length - 1];
       if (lastSeg && currentSegmentIdx >= timeline.length - 1) {
         const url = getSegmentUrl(lastSeg);
         const video = videosRef.current.get(url);
         if (video && video.currentTime >= lastSeg.end - 0.1) {
-          // Restart from beginning
           setCurrentSegmentIdx(0);
           segmentIdxRef.current = 0;
+          transitionActiveRef.current = false;
           const firstSeg = timeline[0];
           const firstUrl = getSegmentUrl(firstSeg);
           const firstVideo = videosRef.current.get(firstUrl);
@@ -301,7 +465,6 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
         }
       }
 
-      // Resume current segment
       const segment = timeline[currentSegmentIdx];
       if (segment) {
         const url = getSegmentUrl(segment);
@@ -315,7 +478,6 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
     }
   };
 
-  // Scrub
   const handleScrub = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!proposal || totalDuration === 0 || !allLoaded) return;
 
@@ -331,7 +493,6 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
         const offsetInSeg = targetTime - seg.position_in_timeline;
         const seekTo = seg.start + Math.max(0, Math.min(offsetInSeg, segDuration));
 
-        // Pause current
         const curSeg = timeline[currentSegmentIdx];
         if (curSeg) {
           const curUrl = getSegmentUrl(curSeg);
@@ -341,14 +502,13 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
 
         setCurrentSegmentIdx(i);
         segmentIdxRef.current = i;
+        transitionActiveRef.current = false;
         setTimelineTime(targetTime);
         showSegment(i);
 
         const url = getSegmentUrl(seg);
         const video = videosRef.current.get(url);
-        if (video) {
-          video.currentTime = seekTo;
-        }
+        if (video) video.currentTime = seekTo;
         break;
       }
     }
@@ -361,20 +521,21 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
     setTimelineTime(0);
     setIsPlaying(false);
     isPlayingRef.current = false;
+    transitionActiveRef.current = false;
 
-    // Pause all
     for (const [, el] of videosRef.current.entries()) {
       el.pause();
+      resetVideoStyles(el);
     }
+
+    if (overlayRef.current) overlayRef.current.style.display = "none";
 
     if (proposal && timeline.length > 0 && allLoaded) {
       showSegment(0);
       const firstSeg = timeline[0];
       const url = getSegmentUrl(firstSeg);
       const video = videosRef.current.get(url);
-      if (video) {
-        video.currentTime = firstSeg.start;
-      }
+      if (video) video.currentTime = firstSeg.start;
     }
   }, [proposal, allLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -383,21 +544,28 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
   return (
     <div className="flex flex-col h-full gap-2">
       <div className="relative rounded-xl overflow-hidden bg-black flex-1 cursor-pointer" onClick={togglePlay}>
-        {/* Container for dynamically created video elements */}
+        {/* Container for video elements */}
         <div ref={containerRef} className="absolute inset-0" />
 
-        {/* Loading overlay -- only shown during initial load */}
+        {/* Transition overlay (for fade_to_black/white) */}
+        <div
+          ref={overlayRef}
+          className="absolute inset-0 pointer-events-none z-20"
+          style={{ display: "none", opacity: 0 }}
+        />
+
+        {/* Loading overlay */}
         {!allLoaded && proposal && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-20">
+          <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-30">
             <Loader size="md" />
           </div>
         )}
         {!proposal && (
-          <div className="absolute inset-0 flex items-center justify-center z-20">
+          <div className="absolute inset-0 flex items-center justify-center z-30">
             <p className="text-white/30 text-sm">Select a proposal to preview</p>
           </div>
         )}
-        {/* Play/pause overlay icon on video */}
+        {/* Play overlay icon */}
         {proposal && allLoaded && !isPlaying && (
           <div className="absolute inset-0 flex items-center justify-center z-15 pointer-events-none">
             <div className="w-14 h-14 rounded-full glass-light flex items-center justify-center opacity-70">

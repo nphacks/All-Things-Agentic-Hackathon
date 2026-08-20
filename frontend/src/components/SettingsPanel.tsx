@@ -97,6 +97,90 @@ export default function SettingsPanel({ settings, onChange }: SettingsPanelProps
           })}
         </div>
       </div>
+
+      {/* Transitions toggle */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-white/50">Add Transitions</span>
+        <button
+          onClick={() => update({ add_transitions: !settings.add_transitions })}
+          className={`
+            w-10 h-5 rounded-full transition-all relative
+            ${settings.add_transitions
+              ? "bg-green-500/40 border border-green-400/50"
+              : "bg-dark-300 border border-white/10"
+            }
+          `}
+          role="switch"
+          aria-checked={settings.add_transitions}
+          aria-label="Add transitions between clips"
+        >
+          <div
+            className={`
+              w-3.5 h-3.5 rounded-full absolute top-[2px] transition-all
+              ${settings.add_transitions
+                ? "left-[22px] bg-green-400"
+                : "left-[3px] bg-white/30"
+              }
+            `}
+          />
+        </button>
+      </div>
+
+      {/* Filters toggle */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-white/50">Allow Filters</span>
+        <button
+          onClick={() => update({ allow_filters: !settings.allow_filters })}
+          className={`
+            w-10 h-5 rounded-full transition-all relative
+            ${settings.allow_filters
+              ? "bg-green-500/40 border border-green-400/50"
+              : "bg-dark-300 border border-white/10"
+            }
+          `}
+          role="switch"
+          aria-checked={settings.allow_filters}
+          aria-label="Allow visual filters on segments"
+        >
+          <div
+            className={`
+              w-3.5 h-3.5 rounded-full absolute top-[2px] transition-all
+              ${settings.allow_filters
+                ? "left-[22px] bg-green-400"
+                : "left-[3px] bg-white/30"
+              }
+            `}
+          />
+        </button>
+      </div>
+
+      {/* Brightness correction toggle */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-white/50">Auto Brightness</span>
+        <button
+          onClick={() => update({ auto_brightness: !settings.auto_brightness })}
+          className={`
+            w-10 h-5 rounded-full transition-all relative
+            ${settings.auto_brightness
+              ? "bg-green-500/40 border border-green-400/50"
+              : "bg-dark-300 border border-white/10"
+            }
+          `}
+          role="switch"
+          aria-checked={settings.auto_brightness}
+          aria-label="Auto-correct brightness between segments"
+        >
+          <div
+            className={`
+              w-3.5 h-3.5 rounded-full absolute top-[2px] transition-all
+              ${settings.auto_brightness
+                ? "left-[22px] bg-green-400"
+                : "left-[3px] bg-white/30"
+              }
+            `}
+          />
+        </button>
+      </div>
     </div>
   );
 }

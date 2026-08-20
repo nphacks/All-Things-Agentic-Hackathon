@@ -76,3 +76,10 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/* Export progress bar animation */
+@keyframes progress-indeterminate {
+  0% { width: 5%; margin-left: 0; }
+  50% { width: 60%; margin-left: 20%; }
+  100% { width: 5%; margin-left: 95%; }
+}

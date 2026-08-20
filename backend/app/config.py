@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     google_application_credentials: str = ""
     firestore_database: str = "all-things-agent-hackathon"
 
-    # File storage
+    # GCS storage
+    gcs_bucket_name: str = "all-things-agentic-hackathon-projects"
+
+    # File storage (legacy local)
     upload_dir: str = "uploads"
 
     # Server

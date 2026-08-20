@@ -9,3 +9,6 @@ docs/
 roadmaps/
 tutorials/
 uploads/
+node_modules/
+frontend/dist/
+.vscode/

@@ -1,5 +1,6 @@
 import type { JobSettings } from "../types";
 import BriefInput from "./BriefInput";
+import MoodPresets from "./MoodPresets";
 import SettingsPanel from "./SettingsPanel";
 
 interface SettingsDrawerProps {
@@ -53,6 +54,11 @@ export default function SettingsDrawer({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
+          </div>
+
+          {/* Mood Presets */}
+          <div className="mb-4">
+            <MoodPresets onSelect={onBriefChange} />
           </div>
 
           {/* Brief */}

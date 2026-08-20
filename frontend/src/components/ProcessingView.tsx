@@ -51,12 +51,6 @@ function StepDot({ status }: { status: StepStatus }) {
   return <div className="w-5 h-5 rounded-full border-2 border-white/20 bg-dark-400" />;
 }
 
-function StepLine({ completed }: { completed: boolean }) {
-  return (
-    <div className={`w-0.5 h-6 ml-[9px] ${completed ? "bg-green-400" : "bg-white/10"}`} />
-  );
-}
-
 export default function ProcessingView({
   jobId,
   clipFilenames,

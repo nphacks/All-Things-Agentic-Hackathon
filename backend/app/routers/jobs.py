@@ -13,6 +13,7 @@ from app.models.schemas import (
 from app.services.agent_runner import run_agent_job
 from app.services.clip_store import get_clips
 from app.services.firestore import create_job, get_job, update_job_status
+from app.services.projects import add_job_to_project
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -49,19 +50,31 @@ async def create_job_endpoint(request: JobCreateRequest):
         "brief": request.brief,
         "settings": settings.model_dump(),
         "clips": [
-            {"clip_id": c["clip_id"], "filename": c["filename"], "file_path": c["file_path"]}
+            {
+                "clip_id": c["clip_id"],
+                "filename": c["filename"],
+                "file_path": c["file_path"],
+                "gcs_url": c.get("gcs_url"),
+            }
             for c in clips
         ],
     }
     create_job(job_id, job_data)
 
-    # Get clip file paths for agent
-    clip_paths = [c["file_path"] for c in clips]
+    # Get clip GCS URLs for agent (download from GCS for Gemini analysis)
+    clip_info = [
+        {"file_path": c["file_path"], "gcs_url": c.get("gcs_url"), "filename": c["filename"]}
+        for c in clips
+    ]
 
     # Kick off background task (real agent execution)
     asyncio.create_task(
-        run_agent_job(job_id, clip_paths, request.brief, settings.model_dump())
+        run_agent_job(job_id, clip_info, request.brief, settings.model_dump())
     )
+
+    # Link job to project if project_id provided
+    if request.project_id:
+        add_job_to_project(request.project_id, job_id)
 
     return JobCreateResponse(job_id=job_id, status="pending")
 
@@ -103,3 +116,26 @@ async def get_job_proposals(job_id: str):
         status=job.get("status", "unknown"),
         proposals=job.get("proposals", []),
     )
+
+
+@router.put("/{job_id}/proposals")
+async def update_job_proposals(job_id: str, proposals: list[dict]):
+    """Update proposals for a job (saves user edits to transitions/filters/brightness)."""
+    from app.services.firestore import store_proposals
+
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+
+    store_proposals(job_id, proposals)
+
+    # Invalidate any stored exports since proposals changed
+    from app.services.firestore import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    db.collection("jobs").document(job_id).update({
+        "exports": {},
+        "updated_at": datetime.now(timezone.utc),
+    })
+
+    return {"status": "ok"}

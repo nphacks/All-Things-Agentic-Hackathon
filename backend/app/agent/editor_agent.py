@@ -40,6 +40,7 @@ AGENT_INSTRUCTION = """You are an expert video editor agent. Your job is to anal
 - Each proposal MUST be generated with a different creative direction
 - You MUST respect the duration constraints (min/max seconds)
 - You are free to skip clips that don't fit -- this is a real editorial decision
+- You MAY use multiple non-contiguous segments from the same clip (e.g., seconds 1-3 and 7-10 from the same file as separate timeline entries). This is useful for clips with a strong opening and ending but a weak middle, or for revisiting a clip for emphasis.
 - Pass clip_analyses_json as a JSON string (the full array of all analyses)
 - Think like an experienced editor: consider pacing, narrative arc, visual flow, and emotional impact
 

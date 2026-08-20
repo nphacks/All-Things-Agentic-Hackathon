@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import jobs, clips
+from app.routers import jobs, clips, projects, exports
 from app.models.schemas import HealthResponse
 from app.config import settings as app_settings
 
@@ -32,6 +32,8 @@ app.mount("/media", StaticFiles(directory=str(uploads_path)), name="media")
 # Routers
 app.include_router(jobs.router)
 app.include_router(clips.router)
+app.include_router(projects.router)
+app.include_router(exports.router)
 
 
 @app.get("/health", response_model=HealthResponse)

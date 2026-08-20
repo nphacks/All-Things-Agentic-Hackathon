@@ -7,6 +7,7 @@ interface UploadZoneProps {
   clips: ClipMetadata[];
   onClipsUploaded: (newClips: ClipMetadata[]) => void;
   onRemoveClip?: (clipId: string) => void;
+  projectId?: string;
 }
 
 /** Capture first frame from a video File and return as data URL */
@@ -47,7 +48,7 @@ function captureFrame(file: File): Promise<string> {
   });
 }
 
-export default function UploadZone({ clips, onClipsUploaded, onRemoveClip }: UploadZoneProps) {
+export default function UploadZone({ clips, onClipsUploaded, onRemoveClip, projectId }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +75,7 @@ export default function UploadZone({ clips, onClipsUploaded, onRemoveClip }: Upl
 
       try {
         const [result, frames] = await Promise.all([
-          uploadClips(fileArray),
+          uploadClips(fileArray, undefined, projectId),
           Promise.all(framePromises),
         ]);
 
@@ -93,7 +94,7 @@ export default function UploadZone({ clips, onClipsUploaded, onRemoveClip }: Upl
         setIsUploading(false);
       }
     },
-    [onClipsUploaded]
+    [onClipsUploaded, projectId]
   );
 
   const onDrop = useCallback(

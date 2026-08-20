@@ -4,6 +4,7 @@ export interface ClipMetadata {
   filename: string;
   file_path: string;
   size_bytes: number;
+  gcs_url?: string;
 }
 
 /** Settings for a job */
@@ -12,6 +13,9 @@ export interface JobSettings {
   max_duration: number;
   num_proposals: number;
   variations: string[];
+  add_transitions: boolean;
+  allow_filters: boolean;
+  auto_brightness: boolean;
 }
 
 /** A single segment in a clip analysis */
@@ -39,9 +43,25 @@ export interface ClipAnalysis {
   best_moments: BestMoment[];
   has_text: boolean;
   has_faces: boolean;
+  perceived_speed?: "timelapse" | "fast_motion" | "normal" | "slow_motion" | "static";
+  motion_intensity?: number;
+  brightness_level?: "dark" | "medium" | "bright";
+  has_internal_cuts?: boolean;
   input_tokens?: number;
   output_tokens?: number;
   status?: string;
+}
+
+/** Transition between timeline segments */
+export interface Transition {
+  type: "cut" | "crossfade" | "fade_to_black" | "fade_to_white" | "wipe_left" | "wipe_right" | "zoom_in" | "blur";
+  duration: number;
+}
+
+/** Filter applied to a timeline segment */
+export interface Filter {
+  type: "none" | "grayscale" | "sepia" | "high_contrast" | "warm" | "cool" | "vintage" | "dramatic";
+  intensity: number;
 }
 
 /** A single segment in a proposal timeline */
@@ -51,7 +71,9 @@ export interface TimelineSegment {
   start: number;
   end: number;
   position_in_timeline: number;
-  transition: string;
+  transition: Transition | string;
+  filter?: Filter;
+  brightness_adjustment?: number;
 }
 
 /** A generated proposal */
@@ -80,7 +102,7 @@ export interface JobStatus {
   progress: string | null;
   brief: string | null;
   error: string | null;
-  clips: { clip_id: string; filename: string; file_path: string }[];
+  clips: { clip_id: string; filename: string; file_path: string; gcs_url?: string }[];
   clip_analyses: Record<string, ClipAnalysis>;
   proposals: Proposal[];
   created_at: string | null;

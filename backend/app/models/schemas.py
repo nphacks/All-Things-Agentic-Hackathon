@@ -18,6 +18,7 @@ class ClipMetadata(BaseModel):
     filename: str
     file_path: str
     size_bytes: int
+    gcs_url: Optional[str] = None
 
 
 class JobSettings(BaseModel):
@@ -25,12 +26,16 @@ class JobSettings(BaseModel):
     max_duration: int = 30
     num_proposals: int = 3
     variations: list[str] = []
+    add_transitions: bool = True
+    allow_filters: bool = True
+    auto_brightness: bool = True
 
 
 class JobCreateRequest(BaseModel):
     brief: str
     clip_ids: list[str]
     settings: Optional[JobSettings] = None
+    project_id: Optional[str] = None
 
 
 class JobCreateResponse(BaseModel):

@@ -1,6 +1,6 @@
 """In-memory clip metadata store.
 
-Tracks uploaded clips so the job endpoint can look up file paths by clip_id.
+Tracks uploaded clips so the job endpoint can look up file paths and GCS URLs by clip_id.
 In production, this would be backed by Firestore or a database.
 For v1, this lives in memory (resets on server restart).
 """
@@ -12,7 +12,14 @@ from typing import Optional
 _clip_store: dict[str, dict] = {}
 
 
-def register_clip(clip_id: str, filename: str, file_path: str, size_bytes: int, job_id: str) -> None:
+def register_clip(
+    clip_id: str,
+    filename: str,
+    file_path: str,
+    size_bytes: int,
+    job_id: str,
+    gcs_url: Optional[str] = None,
+) -> None:
     """Register an uploaded clip in the store."""
     _clip_store[clip_id] = {
         "clip_id": clip_id,
@@ -20,6 +27,7 @@ def register_clip(clip_id: str, filename: str, file_path: str, size_bytes: int, 
         "file_path": file_path,
         "size_bytes": size_bytes,
         "job_id": job_id,
+        "gcs_url": gcs_url,
     }
 
 

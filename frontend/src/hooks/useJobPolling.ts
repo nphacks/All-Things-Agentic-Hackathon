@@ -35,8 +35,13 @@ export function useJobPolling(jobId: string | null): UseJobPollingResult {
         }
       } catch (e: unknown) {
         if (!active) return;
-        const msg = e instanceof Error ? e.message : "Polling failed";
-        setError(msg);
+        // Silently ignore transient network errors during polling.
+        // Only surface errors if we've never gotten a successful response.
+        if (!job) {
+          const msg = e instanceof Error ? e.message : "Polling failed";
+          setError(msg);
+        }
+        // Otherwise just skip this poll cycle -- next one will retry.
       }
     };
 
