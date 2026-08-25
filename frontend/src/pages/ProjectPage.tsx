@@ -49,6 +49,12 @@ export default function ProjectPage() {
     add_transitions: true,
     allow_filters: true,
     auto_brightness: true,
+    manage_audio: true,
+    add_voiceover: false,
+    voice_name: "en-US-Journey-D",
+    speaking_rate: 1.0,
+    speech_context: "",
+    add_background_music: true,
   });
   const [projectName, setProjectName] = useState("Untitled Project");
   const [jobId, setJobId] = useState<string | null>(null);
@@ -196,6 +202,7 @@ export default function ProjectPage() {
         <ProcessingView
           jobId={jobId}
           clipFilenames={clips.map((c) => c.filename)}
+          settings={settings}
           onComplete={handleJobComplete}
           onRetry={handleRetry}
         />

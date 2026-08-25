@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # File storage (legacy local)
     upload_dir: str = "uploads"
 
+    # Jamendo music API
+    jamendo_client_id: str = ""
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8080

@@ -99,6 +99,7 @@ async def get_job_status(job_id: str):
         clips=job.get("clips", []),
         clip_analyses=job.get("clip_analyses", {}),
         proposals=job.get("proposals", []),
+        edit_log=job.get("edit_log", []),
         created_at=str(created_at) if created_at else None,
         updated_at=str(updated_at) if updated_at else None,
     )

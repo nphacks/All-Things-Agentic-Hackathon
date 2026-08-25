@@ -167,6 +167,38 @@ export interface ExportStatus {
   error: string | null;
 }
 
+// --- Speech endpoints ---
+
+export interface RenderChunkResponse {
+  chunk_id: string;
+  text: string;
+  voice: string;
+  speaking_rate: number;
+  gcs_url: string;
+  audio_duration: number;
+}
+
+/** Render a single speech chunk (or preview voice). */
+export async function renderSpeechChunk(
+  projectId: string,
+  chunkId: string,
+  text: string,
+  voice: string,
+  speakingRate: number,
+): Promise<RenderChunkResponse> {
+  const response = await fetch(`${BASE_URL}/projects/${projectId}/speech/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chunk_id: chunkId,
+      text,
+      voice,
+      speaking_rate: speakingRate,
+    }),
+  });
+  return handleResponse<RenderChunkResponse>(response);
+}
+
 /** Start an export job for a proposal. */
 export async function startExport(
   projectId: string,
@@ -200,3 +232,57 @@ export async function getExportStatus(
 }
 
 export { ApiError };
+
+// --- Music endpoints ---
+
+export interface MusicTrackResult {
+  id: string;
+  name: string;
+  artist_name: string;
+  duration: number;
+  audio: string;
+  tags: string[];
+}
+
+export interface MusicRefineResponse {
+  status: string;
+  music: Record<string, unknown>;
+}
+
+/** Refine music selection via agent feedback. */
+export async function refineMusicSelection(
+  projectId: string,
+  proposalIndex: number,
+  feedback: string,
+  currentMusic: Record<string, unknown> | null,
+  jobId?: string,
+): Promise<MusicRefineResponse> {
+  const body: Record<string, unknown> = {
+    proposal_index: proposalIndex,
+    feedback,
+    current_music: currentMusic,
+  };
+  if (jobId) {
+    body.job_id = jobId;
+  }
+
+  const response = await fetch(`${BASE_URL}/projects/${projectId}/music/refine`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<MusicRefineResponse>(response);
+}
+
+/** Search Jamendo directly for music tracks. */
+export async function searchMusicTracks(
+  projectId: string,
+  query: string,
+): Promise<MusicTrackResult[]> {
+  const response = await fetch(`${BASE_URL}/projects/${projectId}/music/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  return handleResponse<MusicTrackResult[]>(response);
+}

@@ -16,6 +16,12 @@ export interface JobSettings {
   add_transitions: boolean;
   allow_filters: boolean;
   auto_brightness: boolean;
+  manage_audio: boolean;
+  add_voiceover: boolean;
+  voice_name: string;
+  speaking_rate: number;
+  speech_context: string;
+  add_background_music: boolean;
 }
 
 /** A single segment in a clip analysis */
@@ -64,6 +70,19 @@ export interface Filter {
   intensity: number;
 }
 
+/** Audio keyframe for volume control */
+export interface AudioKeyframe {
+  time: number;
+  volume: number;
+  transition: "immediate" | "fade";
+  fade_duration?: number;
+}
+
+/** Audio control for a timeline segment */
+export interface SegmentAudio {
+  keyframes: AudioKeyframe[];
+}
+
 /** A single segment in a proposal timeline */
 export interface TimelineSegment {
   clip_id: string;
@@ -74,6 +93,7 @@ export interface TimelineSegment {
   transition: Transition | string;
   filter?: Filter;
   brightness_adjustment?: number;
+  audio?: SegmentAudio;
 }
 
 /** A generated proposal */
@@ -105,6 +125,7 @@ export interface JobStatus {
   clips: { clip_id: string; filename: string; file_path: string; gcs_url?: string }[];
   clip_analyses: Record<string, ClipAnalysis>;
   proposals: Proposal[];
+  edit_log?: { action: string; clip?: string; clips?: string[]; track?: string; artist?: string; summary?: string; reason?: string }[];
   created_at: string | null;
   updated_at: string | null;
 }

@@ -1,12 +1,15 @@
 """Video export service using ffmpeg.
 
-Renders a proposal into a single MP4 file.
+Renders a proposal into a single MP4 file with mixed audio.
 Strategy:
 1. Download clips from GCS
-2. Trim segments with -c copy (fast, no re-encode)
-3. Re-encode trimmed segments to normalize format (needed for xfade compatibility)
-4. Apply xfade transitions iteratively between segments
-5. Upload final to GCS
+2. Trim segments with filters (video only)
+3. Apply xfade transitions iteratively between segments
+4. Build original audio track (with volume keyframes)
+5. Build speech audio track (WAVs at correct offsets)
+6. Build music audio track (trimmed + volume keyframes)
+7. Mix all audio layers + mux with video
+8. Upload final to GCS
 """
 
 import os
@@ -16,6 +19,8 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Optional
+
+import requests as http_requests
 
 from app.services.gcs_storage import upload_to_gcs
 
@@ -112,6 +117,289 @@ def _get_duration(filepath: str) -> float:
         return float(result.stdout.strip())
     except (ValueError, AttributeError):
         return 5.0
+
+
+def _build_volume_filter(keyframes: list[dict], total_duration: float) -> str:
+    """Convert volume keyframes to an ffmpeg volume filter expression.
+
+    Builds a piecewise linear interpolation using nested if/between expressions.
+    """
+    if not keyframes or len(keyframes) == 0:
+        return "volume=1.0"
+
+    # Sort by time
+    kfs = sorted(keyframes, key=lambda k: k.get("time", 0))
+
+    if len(kfs) == 1:
+        return f"volume={kfs[0].get('volume', 1.0)}"
+
+    # Build piecewise expression
+    # For each pair of keyframes, interpolate linearly between them
+    parts = []
+    for i in range(len(kfs) - 1):
+        t1 = kfs[i].get("time", 0)
+        v1 = kfs[i].get("volume", 1.0)
+        t2 = kfs[i + 1].get("time", 0)
+        v2 = kfs[i + 1].get("volume", 1.0)
+
+        dt = t2 - t1
+        if dt <= 0:
+            continue
+
+        # Linear interp: v1 + (v2-v1) * (t-t1) / (t2-t1)
+        slope = (v2 - v1) / dt
+        if abs(slope) < 0.001:
+            # Constant volume in this range
+            expr = f"if(between(t,{t1:.3f},{t2:.3f}),{v1:.3f}"
+        else:
+            expr = f"if(between(t,{t1:.3f},{t2:.3f}),{v1:.3f}+{slope:.6f}*(t-{t1:.3f})"
+        parts.append(expr)
+
+    if not parts:
+        return f"volume={kfs[0].get('volume', 1.0)}"
+
+    # Combine with nested else: first match wins
+    # ffmpeg eval: if(cond, then, else)
+    combined = parts[-1] + f",{kfs[-1].get('volume', 0.0)})"
+    for i in range(len(parts) - 2, -1, -1):
+        combined = parts[i] + "," + combined + ")"
+
+    return f"volume='{combined}':eval=frame"
+
+
+def _build_original_audio(
+    timeline: list[dict],
+    clip_map: dict[str, str],
+    total_duration: float,
+    temp_dir: str,
+) -> Optional[str]:
+    """Extract and combine original audio from timeline segments with volume keyframes."""
+    segment_audios = []
+
+    for i, segment in enumerate(timeline):
+        src_path = _resolve_clip_path(segment, clip_map)
+        if not src_path:
+            continue
+
+        start = segment.get("start", 0)
+        end = segment.get("end", 0)
+        duration = end - start
+        if duration <= 0:
+            continue
+
+        seg_audio = os.path.join(temp_dir, f"orig_audio_{i:03d}.wav")
+
+        # Extract audio from segment
+        cmd = ["ffmpeg", "-y", "-ss", str(start), "-i", src_path, "-t", str(duration),
+               "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", seg_audio]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        if result.returncode != 0:
+            # No audio -- create silence
+            cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo",
+                   "-t", str(duration), "-acodec", "pcm_s16le", seg_audio]
+            subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+
+        # Apply volume keyframes if present
+        audio_data = segment.get("audio", {})
+        keyframes = audio_data.get("keyframes", []) if isinstance(audio_data, dict) else []
+        if keyframes:
+            filtered_audio = os.path.join(temp_dir, f"orig_audio_vol_{i:03d}.wav")
+            vol_filter = _build_volume_filter(keyframes, duration)
+            cmd = ["ffmpeg", "-y", "-i", seg_audio, "-af", vol_filter,
+                   "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", filtered_audio]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                seg_audio = filtered_audio
+
+        segment_audios.append(seg_audio)
+
+    if not segment_audios:
+        return None
+
+    # Concatenate all segment audios
+    concat_list = os.path.join(temp_dir, "orig_audio_concat.txt")
+    with open(concat_list, "w") as f:
+        for path in segment_audios:
+            f.write(f"file '{path}'\n")
+
+    output = os.path.join(temp_dir, "original_audio.wav")
+    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
+           "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", output]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+    if result.returncode != 0:
+        return None
+    return output
+
+
+def _build_speech_track(
+    speech_chunks: list[dict],
+    total_duration: float,
+    temp_dir: str,
+) -> Optional[str]:
+    """Download speech WAVs and create a combined speech track with correct offsets."""
+    if not speech_chunks:
+        return None
+
+    # Download speech files
+    chunk_files = []
+    for chunk in speech_chunks:
+        gcs_url = chunk.get("gcs_url")
+        if not gcs_url:
+            continue
+
+        chunk_id = chunk.get("chunk_id", f"chunk_{len(chunk_files)}")
+        local_path = os.path.join(temp_dir, f"speech_{chunk_id}.wav")
+
+        try:
+            resp = http_requests.get(gcs_url, timeout=15)
+            resp.raise_for_status()
+            with open(local_path, "wb") as f:
+                f.write(resp.content)
+            chunk_files.append({
+                "path": local_path,
+                "start_time": chunk.get("start_time", 0),
+            })
+        except Exception:
+            continue
+
+    if not chunk_files:
+        return None
+
+    # Build a speech track by placing each chunk at its start_time
+    # Strategy: create silence of total_duration, then overlay each chunk with adelay
+    silence = os.path.join(temp_dir, "speech_silence.wav")
+    cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=24000:cl=mono",
+           "-t", str(total_duration), "-acodec", "pcm_s16le", silence]
+    subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+
+    # Overlay chunks one at a time
+    current = silence
+    for i, cf in enumerate(chunk_files):
+        output = os.path.join(temp_dir, f"speech_overlay_{i:03d}.wav")
+        delay_ms = int(cf["start_time"] * 1000)
+
+        cmd = [
+            "ffmpeg", "-y", "-i", current, "-i", cf["path"],
+            "-filter_complex",
+            f"[1:a]adelay={delay_ms}|{delay_ms},aresample=44100[delayed];"
+            f"[0:a]aresample=44100[base];"
+            f"[base][delayed]amix=inputs=2:duration=first:normalize=0[out]",
+            "-map", "[out]", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", output
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            current = output
+        # If overlay fails, continue with what we have
+
+    return current if current != silence else None
+
+
+def _build_music_track(
+    music_data: dict,
+    total_duration: float,
+    temp_dir: str,
+) -> Optional[str]:
+    """Download music track, trim, and apply volume keyframes."""
+    if not music_data:
+        return None
+
+    music_url = music_data.get("url") or music_data.get("preview_url")
+    if not music_url:
+        return None
+
+    # Download music file
+    music_file = os.path.join(temp_dir, "music_raw.mp3")
+    try:
+        resp = http_requests.get(music_url, timeout=30)
+        resp.raise_for_status()
+        with open(music_file, "wb") as f:
+            f.write(resp.content)
+    except Exception:
+        return None
+
+    # Get placement info
+    placement = music_data.get("placement", {})
+    track_start = placement.get("track_start", 0)
+    end_time = placement.get("end_time", total_duration)
+    music_duration = min(end_time, total_duration)
+
+    # Trim and convert to WAV
+    trimmed = os.path.join(temp_dir, "music_trimmed.wav")
+    cmd = ["ffmpeg", "-y", "-ss", str(track_start), "-i", music_file,
+           "-t", str(music_duration),
+           "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", trimmed]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        return None
+
+    # Apply volume keyframes
+    keyframes = music_data.get("volume_keyframes", [])
+    if keyframes:
+        filtered = os.path.join(temp_dir, "music_volume.wav")
+        vol_filter = _build_volume_filter(keyframes, music_duration)
+        cmd = ["ffmpeg", "-y", "-i", trimmed, "-af", vol_filter,
+               "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", filtered]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            trimmed = filtered
+
+    # If music is shorter than total_duration, pad with silence
+    actual_dur = _get_duration(trimmed)
+    if actual_dur < total_duration - 0.5:
+        padded = os.path.join(temp_dir, "music_padded.wav")
+        cmd = ["ffmpeg", "-y", "-i", trimmed, "-af",
+               f"apad=whole_dur={total_duration}",
+               "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", padded]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0:
+            trimmed = padded
+
+    return trimmed
+
+
+def _mix_audio_layers(
+    original: Optional[str],
+    speech: Optional[str],
+    music: Optional[str],
+    total_duration: float,
+    temp_dir: str,
+) -> Optional[str]:
+    """Mix available audio layers into a single audio file."""
+    inputs = []
+    if original:
+        inputs.append(original)
+    if speech:
+        inputs.append(speech)
+    if music:
+        inputs.append(music)
+
+    if not inputs:
+        return None
+
+    if len(inputs) == 1:
+        return inputs[0]
+
+    # Mix all layers together
+    output = os.path.join(temp_dir, "mixed_audio.wav")
+    input_args = []
+    for f in inputs:
+        input_args.extend(["-i", f])
+
+    filter_str = f"amix=inputs={len(inputs)}:duration=longest:normalize=0"
+
+    cmd = ["ffmpeg", "-y"] + input_args + [
+        "-filter_complex", filter_str,
+        "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", output
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+    if result.returncode != 0:
+        # Fallback: just use the first available track
+        return inputs[0]
+
+    return output
 
 
 def export_proposal(
@@ -216,7 +504,39 @@ def export_proposal(
         else:
             final_output = _apply_transitions(segment_files, timeline, temp_dir)
 
-        # Step 4: Upload to GCS
+        # Step 4: Build audio layers
+        total_duration = proposal.get("total_duration", 0)
+        if total_duration <= 0:
+            total_duration = sum(s.get("end", 0) - s.get("start", 0) for s in timeline)
+
+        # Original audio (with per-segment volume keyframes)
+        original_audio = _build_original_audio(timeline, clip_map, total_duration, temp_dir)
+
+        # Speech audio (voiceover chunks at correct offsets)
+        speech_chunks = proposal.get("speech", [])
+        speech_audio = _build_speech_track(speech_chunks, total_duration, temp_dir)
+
+        # Music audio (background track with ducking keyframes)
+        music_data = proposal.get("music", {})
+        music_audio = _build_music_track(music_data, total_duration, temp_dir)
+
+        # Step 5: Mix all audio layers
+        mixed_audio = _mix_audio_layers(original_audio, speech_audio, music_audio, total_duration, temp_dir)
+
+        # Step 6: Mux video + audio into final MP4
+        if mixed_audio:
+            muxed_output = os.path.join(temp_dir, "final_muxed.mp4")
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", final_output, "-i", mixed_audio,
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                "-shortest", muxed_output
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                final_output = muxed_output
+
+        # Step 7: Upload to GCS
         export_id = str(uuid.uuid4())
         with open(final_output, "rb") as f:
             content = f.read()

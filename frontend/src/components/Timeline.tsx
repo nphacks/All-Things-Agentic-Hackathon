@@ -13,6 +13,12 @@ interface TimelineProps {
   onTransitionChange?: (segmentIndex: number, transition: Transition) => void;
   onFilterChange?: (segmentIndex: number, filter: Filter) => void;
   onBrightnessChange?: (segmentIndex: number, brightness: number) => void;
+  /** When set, renders the filmstrip at this fixed pixel width (for synced-scale mode). */
+  contentWidthPx?: number;
+  /** Hide the outer card chrome (label/padding) -- used when embedded in a unified timeline. */
+  bare?: boolean;
+  /** Whether to draw the playhead line. Default true. Switcher rows pass false. */
+  showPlayhead?: boolean;
 }
 
 const TRANSITION_TYPES: { type: Transition["type"]; label: string; abbr: string }[] = [
@@ -413,6 +419,9 @@ export default function Timeline({
   onTransitionChange,
   onFilterChange,
   onBrightnessChange,
+  contentWidthPx,
+  bare = false,
+  showPlayhead = true,
 }: TimelineProps) {
   const timeline = proposal.timeline;
   const playheadPct = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0;
@@ -444,24 +453,33 @@ export default function Timeline({
   return (
     <div
       onClick={onClick}
-      className={`rounded-xl p-3 cursor-pointer transition-all ${
-        isActive ? "glass border border-green-500/40" : "glass-light border border-transparent hover:border-white/10"
-      }`}
+      className={
+        bare
+          ? ""
+          : `rounded-xl p-3 cursor-pointer transition-all ${
+              isActive ? "glass border border-green-500/40" : "glass-light border border-transparent hover:border-white/10"
+            }`
+      }
       role="button"
       tabIndex={0}
       aria-label={`Proposal: ${proposal.label}`}
     >
       {/* Label */}
-      <div className="flex items-center justify-between mb-2">
-        <h4 className={`text-sm font-medium ${isActive ? "text-green-400" : "text-white/80"}`}>
-          {proposal.label}
-        </h4>
-        <span className="text-xs text-white/40">{proposal.total_duration.toFixed(1)}s</span>
-      </div>
+      {!bare && (
+        <div className="flex items-center justify-between mb-2">
+          <h4 className={`text-sm font-medium ${isActive ? "text-green-400" : "text-white/80"}`}>
+            {proposal.label}
+          </h4>
+          <span className="text-xs text-white/40">{proposal.total_duration.toFixed(1)}s</span>
+        </div>
+      )}
 
       {/* Filmstrip track -- segments joined, transitions floating on join */}
       <div className="relative">
-        <div className="flex h-16 rounded-lg overflow-hidden bg-dark-400">
+        <div
+          className="flex h-16 rounded-lg overflow-hidden bg-dark-400"
+          style={contentWidthPx ? { width: `${contentWidthPx}px` } : undefined}
+        >
           {timeline.map((segment, i) => {
             const segDuration = segment.end - segment.start;
             const widthPct = totalDuration > 0 ? (segDuration / totalDuration) * 100 : 0;
@@ -499,8 +517,8 @@ export default function Timeline({
           );
         })}
 
-        {/* Playhead */}
-        {isActive && (
+        {/* Playhead -- suppressed in bare mode and when showPlayhead is false */}
+        {isActive && !bare && showPlayhead && (
           <div
             ref={playheadRef}
             className="absolute top-0 bottom-0 w-0.5 bg-green-400 pointer-events-none z-10"
@@ -512,7 +530,7 @@ export default function Timeline({
       </div>
 
       {/* Effects bar (filters + brightness pills) */}
-      <div className="flex mt-1.5 h-6">
+      <div className="flex mt-1.5 h-6" style={contentWidthPx ? { width: `${contentWidthPx}px` } : undefined}>
         {timeline.map((segment, i) => {
           const segDuration = segment.end - segment.start;
           const widthPct = totalDuration > 0 ? (segDuration / totalDuration) * 100 : 0;
@@ -531,18 +549,20 @@ export default function Timeline({
         })}
       </div>
 
-      {/* Time ruler */}
-      <div className="relative h-4 mt-1">
-        {ticks.map((t) => {
-          const pct = totalDuration > 0 ? (t / totalDuration) * 100 : 0;
-          return (
-            <div key={t} className="absolute flex flex-col items-center" style={{ left: `${pct}%` }}>
-              <div className="w-px h-1.5 bg-white/20" />
-              <span className="text-[8px] text-white/30 mt-0.5">{t}s</span>
-            </div>
-          );
-        })}
-      </div>
+      {/* Time ruler -- hidden in bare mode (unified timeline provides its own) */}
+      {!bare && (
+        <div className="relative h-4 mt-1">
+          {ticks.map((t) => {
+            const pct = totalDuration > 0 ? (t / totalDuration) * 100 : 0;
+            return (
+              <div key={t} className="absolute flex flex-col items-center" style={{ left: `${pct}%` }}>
+                <div className="w-px h-1.5 bg-white/20" />
+                <span className="text-[8px] text-white/30 mt-0.5">{t}s</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

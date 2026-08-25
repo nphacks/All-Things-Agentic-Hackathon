@@ -7,8 +7,11 @@ tests/
 .kiro/
 docs/
 roadmaps/
+bug-fixes/
 tutorials/
 uploads/
 node_modules/
 frontend/dist/
 .vscode/
+.DS_Store
+**/.DS_Store

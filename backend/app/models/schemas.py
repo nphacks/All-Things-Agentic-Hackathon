@@ -29,6 +29,12 @@ class JobSettings(BaseModel):
     add_transitions: bool = True
     allow_filters: bool = True
     auto_brightness: bool = True
+    manage_audio: bool = True
+    add_voiceover: bool = False
+    voice_name: str = "en-US-Journey-D"
+    speaking_rate: float = 1.0
+    speech_context: str = ""
+    add_background_music: bool = True
 
 
 class JobCreateRequest(BaseModel):
@@ -52,6 +58,7 @@ class JobStatusResponse(BaseModel):
     clips: list[dict[str, Any]] = []
     clip_analyses: dict[str, Any] = {}
     proposals: list[dict[str, Any]] = []
+    edit_log: list[dict[str, Any]] = []
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

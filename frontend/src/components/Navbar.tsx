@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 interface NavbarProps {
   projectName: string;
@@ -23,10 +24,14 @@ export default function Navbar({ projectName, onProjectNameChange, rightContent 
   return (
     <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-auto max-w-3xl">
       <nav className="glass-strong rounded-full px-6 py-3 flex items-center gap-4">
-        {/* Logo / App name */}
-        <span className="text-green-400 font-semibold text-sm tracking-tight whitespace-nowrap">
+        {/* Logo / App name -- links to landing page */}
+        <Link
+          to="/"
+          className="text-green-400 font-semibold text-sm tracking-tight whitespace-nowrap hover:text-green-300 transition-colors"
+          title="Back to projects"
+        >
           Ad Cut Agent
-        </span>
+        </Link>
 
         {/* Divider */}
         <div className="w-px h-5 bg-white/10" />

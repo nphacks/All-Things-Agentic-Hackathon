@@ -1,11 +1,12 @@
 import { useEffect } from "react";
-import type { JobStatus } from "../types";
+import type { JobSettings, JobStatus } from "../types";
 import { useJobPolling } from "../hooks/useJobPolling";
 import Loader from "./Loader";
 
 interface ProcessingViewProps {
   jobId: string;
   clipFilenames: string[];
+  settings?: JobSettings;
   onComplete: (job: JobStatus) => void;
   onRetry: () => void;
 }
@@ -54,6 +55,7 @@ function StepDot({ status }: { status: StepStatus }) {
 export default function ProcessingView({
   jobId,
   clipFilenames,
+  settings,
   onComplete,
   onRetry,
 }: ProcessingViewProps) {
@@ -67,7 +69,17 @@ export default function ProcessingView({
   }, [job, onComplete]);
 
   const status = job?.status || "pending";
+  const progress = job?.progress || "";
   const analyzedCount = job?.clip_analyses ? Object.keys(job.clip_analyses).length : 0;
+  const voiceoverEnabled = settings?.add_voiceover ?? false;
+
+  // Parse progress for audio analysis count
+  const audioMatch = progress.match(/(\d+) of \d+ \(audio\)/);
+  const audioAnalyzedCount = audioMatch ? parseInt(audioMatch[1], 10) : 0;
+
+  // Parse progress for speech-related states
+  const isSpeechGenerating = progress.includes("speech script") || progress.includes("Rendering speech");
+  const isRenderingSpeech = progress.includes("Rendering speech");
 
   // Determine step statuses
   const getStepStatus = (step: number): StepStatus => {
@@ -80,15 +92,20 @@ export default function ProcessingView({
     switch (step) {
       case 1: // Upload
         return "completed"; // always done by this point
-      case 2: // Analyzing
+      case 2: // Analyzing (video + audio)
         if (status === "analyzing") return "active";
         if (status === "generating" || status === "completed") return "completed";
         return "pending";
-      case 3: // Generating
-        if (status === "generating") return "active";
+      case 3: // Generating proposals
+        if (status === "generating" && !isSpeechGenerating) return "active";
+        if (status === "generating" && isSpeechGenerating) return "completed";
         if (status === "completed") return "completed";
         return "pending";
-      case 4: // Complete
+      case 4: // Speech (only relevant when voiceover enabled)
+        if (status === "generating" && isSpeechGenerating) return "active";
+        if (status === "completed") return voiceoverEnabled ? "completed" : "pending";
+        return "pending";
+      case 5: // Complete
         if (status === "completed") return "completed";
         return "pending";
       default:
@@ -100,6 +117,7 @@ export default function ProcessingView({
   const step2 = getStepStatus(2);
   const step3 = getStepStatus(3);
   const step4 = getStepStatus(4);
+  const step5 = getStepStatus(5);
 
   return (
     <div className="flex-1 flex items-center justify-center p-8">
@@ -110,7 +128,7 @@ export default function ProcessingView({
         )}
 
         {/* Vertical timeline */}
-        <div className="relative pl-0">
+        <div className="relative pl-0 space-y-4">
           {/* Step 1: Upload */}
           <div className="flex items-center gap-3">
             <StepDot status={step1} />
@@ -118,9 +136,6 @@ export default function ProcessingView({
               Clips Uploaded
             </span>
           </div>
-
-          {/* Line between 1 and 2 */}
-          <div className={`w-[2px] h-6 ml-[9px] ${step1 === "completed" ? "bg-green-400" : "bg-white/10"}`} />
 
           {/* Step 2: Analyzing */}
           <div className="flex items-center gap-3">
@@ -130,6 +145,11 @@ export default function ProcessingView({
               {step2 === "active" && (
                 <span className="text-sm text-green-400/70 ml-2">
                   {analyzedCount}/{clipFilenames.length}
+                  {audioAnalyzedCount > 0 && (
+                    <span className="text-white/40 ml-1">
+                      (audio {audioAnalyzedCount}/{clipFilenames.length})
+                    </span>
+                  )}
                 </span>
               )}
             </span>
@@ -162,9 +182,6 @@ export default function ProcessingView({
             </div>
           )}
 
-          {/* Line between 2 and 3 */}
-          <div className={`w-[2px] h-6 ml-[9px] ${step2 === "completed" ? "bg-green-400" : "bg-white/10"}`} />
-
           {/* Step 3: Generating */}
           <div className="flex items-center gap-3">
             <StepDot status={step3} />
@@ -178,13 +195,30 @@ export default function ProcessingView({
             </span>
           </div>
 
-          {/* Line between 3 and 4 */}
-          <div className={`w-[2px] h-6 ml-[9px] ${step3 === "completed" ? "bg-green-400" : "bg-white/10"}`} />
+          {/* Step 4: Speech (only when voiceover enabled) */}
+          {voiceoverEnabled && (
+            <>
+              <div className="flex items-center gap-3">
+                <StepDot status={step4} />
+                <span className={`text-base ${step4 !== "pending" ? "text-white/90" : "text-white/40"}`}>
+                  Generating Speech
+                  {step4 === "active" && (
+                    <span className="text-sm text-green-400/70 ml-2">
+                      {isRenderingSpeech ? "rendering audio..." : "writing script..."}
+                    </span>
+                  )}
+                </span>
+              </div>
 
-          {/* Step 4: Complete */}
+              {/* Line between 4 and 5 */}
+              <div className={`w-[2px] h-6 ml-[9px] ${step4 === "completed" ? "bg-green-400" : "bg-white/10"}`} />
+            </>
+          )}
+
+          {/* Step 5: Complete */}
           <div className="flex items-center gap-3">
-            <StepDot status={step4} />
-            <span className={`text-base ${step4 === "completed" ? "text-green-400 font-medium" : "text-white/40"}`}>
+            <StepDot status={step5} />
+            <span className={`text-base ${step5 === "completed" ? "text-green-400 font-medium" : "text-white/40"}`}>
               Complete
             </span>
           </div>

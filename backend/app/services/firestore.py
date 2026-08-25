@@ -39,6 +39,43 @@ def get_db() -> firestore.Client:
 JOBS_COLLECTION = "jobs"
 
 
+def sanitize_for_firestore(value: Any) -> Any:
+    """Recursively strip/convert values that Firestore cannot serialize.
+
+    Firestore (and JSON) cannot store raw bytes or arbitrary objects. This
+    walks dicts/lists and converts bytes to a decoded string (or drops them),
+    leaving primitives untouched. Prevents "Object of type bytes is not JSON
+    serializable" errors that would otherwise crash the whole job.
+    """
+    if isinstance(value, bytes):
+        # Represent bytes as a short placeholder rather than storing raw data
+        return f"<bytes:{len(value)}>"
+    if isinstance(value, dict):
+        clean = {}
+        for k, v in value.items():
+            # Keys must be strings for Firestore/JSON
+            if isinstance(k, bytes):
+                key = k.decode("utf-8", errors="replace")
+            elif not isinstance(k, str):
+                key = str(k)
+            else:
+                key = k
+            clean[key] = sanitize_for_firestore(v)
+        return clean
+    if isinstance(value, (list, tuple)):
+        return [sanitize_for_firestore(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    # Datetime and Firestore sentinel types pass through
+    if isinstance(value, datetime):
+        return value
+    # Fallback: stringify anything else (Part objects, etc.)
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
 def create_job(job_id: str, job_data: dict[str, Any]) -> dict[str, Any]:
     """Create a new job document with status 'pending'.
 
@@ -101,9 +138,69 @@ def store_clip_analysis(job_id: str, clip_id: str, analysis: dict[str, Any]) -> 
     """
     db = get_db()
     db.collection(JOBS_COLLECTION).document(job_id).update({
-        f"clip_analyses.{clip_id}": analysis,
+        f"clip_analyses.{clip_id}": sanitize_for_firestore(analysis),
         "updated_at": datetime.now(timezone.utc),
     })
+
+
+def store_clip_audio_analysis(job_id: str, clip_id: str, audio_analysis: dict[str, Any]) -> None:
+    """Store audio analysis results for a single clip.
+
+    Stored under clip_analyses.{clip_id}.audio in Firestore.
+
+    Args:
+        job_id: Job identifier.
+        clip_id: Clip identifier.
+        audio_analysis: Structured audio analysis dict from Gemini.
+    """
+    db = get_db()
+    db.collection(JOBS_COLLECTION).document(job_id).update({
+        f"clip_analyses.{clip_id}.audio": sanitize_for_firestore(audio_analysis),
+        "updated_at": datetime.now(timezone.utc),
+    })
+
+
+def store_clip_waveform(job_id: str, clip_id: str, waveform: list[float]) -> None:
+    """Store waveform amplitude data for a single clip.
+
+    Stored under clip_analyses.{clip_id}.waveform in Firestore.
+
+    Args:
+        job_id: Job identifier.
+        clip_id: Clip identifier.
+        waveform: Array of floats (0.0-1.0) representing peak amplitudes.
+    """
+    db = get_db()
+    db.collection(JOBS_COLLECTION).document(job_id).update({
+        f"clip_analyses.{clip_id}.waveform": waveform,
+        "updated_at": datetime.now(timezone.utc),
+    })
+
+
+def store_speech_data(job_id: str, proposal_index: int, speech_chunks: list[dict]) -> None:
+    """Store rendered speech data for a proposal.
+
+    Stored under proposals[proposal_index].speech in Firestore.
+
+    Args:
+        job_id: Job identifier.
+        proposal_index: Index of the proposal in the proposals array.
+        speech_chunks: Array of rendered speech chunk dicts (with gcs_url, audio_duration).
+    """
+    db = get_db()
+    doc_ref = db.collection(JOBS_COLLECTION).document(job_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        return
+
+    data = doc.to_dict()
+    proposals = data.get("proposals", [])
+    if proposal_index < len(proposals):
+        proposals[proposal_index]["speech"] = sanitize_for_firestore(speech_chunks)
+        doc_ref.update({
+            "proposals": proposals,
+            "updated_at": datetime.now(timezone.utc),
+        })
 
 
 def store_proposals(job_id: str, proposals: list[dict[str, Any]]) -> None:
@@ -115,7 +212,7 @@ def store_proposals(job_id: str, proposals: list[dict[str, Any]]) -> None:
     """
     db = get_db()
     db.collection(JOBS_COLLECTION).document(job_id).update({
-        "proposals": proposals,
+        "proposals": sanitize_for_firestore(proposals),
         "updated_at": datetime.now(timezone.utc),
     })
 
@@ -136,3 +233,46 @@ def get_job(job_id: str) -> Optional[dict[str, Any]]:
     data = doc.to_dict()
     data["job_id"] = job_id
     return data
+
+
+def store_music_data(job_id: str, proposal_index: int, music: dict[str, Any]) -> None:
+    """Store background music selection data for a proposal.
+
+    Stored under proposals[proposal_index].music in Firestore.
+
+    Args:
+        job_id: Job identifier.
+        proposal_index: Index of the proposal in the proposals array.
+        music: Music selection dict (track_id, title, artist, url, placement, volume_keyframes, etc.).
+    """
+    db = get_db()
+    doc_ref = db.collection(JOBS_COLLECTION).document(job_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        return
+
+    data = doc.to_dict()
+    proposals = data.get("proposals", [])
+    if proposal_index < len(proposals):
+        proposals[proposal_index]["music"] = sanitize_for_firestore(music)
+        doc_ref.update({
+            "proposals": proposals,
+            "updated_at": datetime.now(timezone.utc),
+        })
+
+
+def store_edit_log(job_id: str, edit_log: list[dict[str, Any]]) -> None:
+    """Store the AI edit log for a job.
+
+    The edit log captures agent decisions during job execution.
+    Stored under jobs/{job_id}.edit_log in Firestore.
+
+    Args:
+        job_id: Job identifier.
+        edit_log: List of log entry dicts (action, summary, timestamp, etc.).
+    """
+    db = get_db()
+    db.collection(JOBS_COLLECTION).document(job_id).update({
+        "edit_log": sanitize_for_firestore(edit_log),
+        "updated_at": datetime.now(timezone.utc),
+    })

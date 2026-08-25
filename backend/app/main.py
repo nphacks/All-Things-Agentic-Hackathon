@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import jobs, clips, projects, exports
+from app.routers import jobs, clips, projects, exports, speech, music
 from app.models.schemas import HealthResponse
 from app.config import settings as app_settings
 
@@ -34,6 +34,8 @@ app.include_router(jobs.router)
 app.include_router(clips.router)
 app.include_router(projects.router)
 app.include_router(exports.router)
+app.include_router(speech.router)
+app.include_router(music.router)
 
 
 @app.get("/health", response_model=HealthResponse)

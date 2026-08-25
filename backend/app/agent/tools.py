@@ -9,6 +9,7 @@ These are designed as ADK-compatible function tools:
 
 import json
 import os
+import threading
 from pathlib import Path
 
 from google import genai
@@ -19,6 +20,33 @@ from app.config import settings
 
 # Maximum video file size we'll send to Gemini (200MB)
 MAX_VIDEO_SIZE_BYTES = 200 * 1024 * 1024
+
+# Proposal generation limiter -- prevents the agent from generating more proposals than requested.
+# Set before each job run via set_proposal_limit(), checked inside generate_edit_plan().
+_proposal_lock = threading.Lock()
+_proposal_count = 0
+_proposal_limit = 3  # default
+
+
+def set_proposal_limit(limit: int) -> None:
+    """Set the max proposals allowed and reset the counter. Call before each job."""
+    global _proposal_count, _proposal_limit
+    with _proposal_lock:
+        _proposal_count = 0
+        _proposal_limit = limit
+
+
+def _check_proposal_limit() -> bool:
+    """Check if within limit without incrementing. Returns True if allowed."""
+    with _proposal_lock:
+        return _proposal_count < _proposal_limit
+
+
+def _increment_proposal_count() -> None:
+    """Increment the proposal counter after a successful generation."""
+    global _proposal_count
+    with _proposal_lock:
+        _proposal_count += 1
 
 
 ANALYZE_CLIP_PROMPT = """Analyze this video clip for use in a video advertisement. Return ONLY valid JSON (no markdown, no code fences).
@@ -70,6 +98,49 @@ Rules:
 {additional_focus}"""
 
 
+ANALYZE_CLIP_AUDIO_PROMPT = """Analyze the AUDIO in this video clip. Focus entirely on what you can HEAR, not what you see. Return ONLY valid JSON (no markdown, no code fences).
+
+Use this exact schema:
+{{
+  "has_audio": <boolean - true if any audio is present, false if completely silent>,
+  "audio_type": "dialogue|music|ambient|narration|mixed|silence",
+  "overall_volume": "quiet|medium|loud",
+  "audio_quality": "clean|noisy|windy|echo",
+  "speech_content": "<brief transcript if speech/dialogue/narration is present, null otherwise>",
+  "audio_moments": [
+    {{"time": <seconds>, "event": "description of audio event", "volume_spike": <boolean>}}
+  ],
+  "volume_profile": "consistent|dynamic|fades_out|builds_up"
+}}
+
+Rules:
+- has_audio: false only if the clip is completely silent (no sound at all)
+- audio_type:
+  - "dialogue" = people talking/conversing
+  - "music" = background music or musical performance
+  - "ambient" = environmental sounds (waves, traffic, birds, wind, crowd noise)
+  - "narration" = voiceover or single speaker narrating
+  - "mixed" = combination of multiple types (e.g., music + ambient, dialogue + music)
+  - "silence" = no discernible audio content
+- overall_volume: perceived loudness of the audio track
+- audio_quality:
+  - "clean" = clear, well-recorded audio
+  - "noisy" = background noise, hiss, or interference
+  - "windy" = wind noise on microphone
+  - "echo" = reverberant, echoey space
+- speech_content: if there is speech, provide a brief transcript (1-3 sentences max). If no speech, set to null.
+- audio_moments: list 1-5 notable audio events (sound effects, volume changes, beats, speech starts). Include timestamp and whether it represents a volume spike.
+- volume_profile:
+  - "consistent" = audio level stays roughly the same throughout
+  - "dynamic" = volume varies significantly (loud and quiet parts)
+  - "fades_out" = audio gets quieter toward the end
+  - "builds_up" = audio gets louder toward the end
+- If has_audio is false, set audio_type to "silence", overall_volume to "quiet", audio_quality to "clean", speech_content to null, audio_moments to empty array, volume_profile to "consistent"
+- Return ONLY valid JSON, nothing else
+
+{additional_focus}"""
+
+
 GENERATE_EDIT_PLAN_PROMPT = """You are an experienced video editor. You have analyzed a set of raw video clips and now need to assemble one timeline proposal for an advertisement.
 
 ## Creative Brief
@@ -88,6 +159,7 @@ The total timeline MUST fall within these constraints.
 {transitions_section}
 {filters_section}
 {brightness_section}
+{audio_section}
 ## Your Task
 Create ONE timeline proposal that satisfies the brief and creative direction. Think like an experienced editor:
 - Consider pacing, narrative arc, visual flow, and emotional impact
@@ -108,7 +180,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this exact schema:
       "start": <start second within the original clip>,
       "end": <end second within the original clip>,
       "position_in_timeline": <start position in the assembled timeline>,
-      "transition": {transition_schema}{filter_field}{brightness_field}
+      "transition": {transition_schema}{filter_field}{brightness_field}{audio_field}
     }}
   ],
   "clips_not_used": ["<file_path>", ...],
@@ -127,6 +199,7 @@ Rules:
 {transition_rules}
 {filter_rules}
 {brightness_rules}
+{audio_rules}
 - Return ONLY valid JSON"""
 
 
@@ -209,6 +282,41 @@ BRIGHTNESS_RULES_WITH = """- brightness_adjustment is optional. If omitted, defa
 BRIGHTNESS_RULES_WITHOUT = ""
 
 
+AUDIO_SECTION = """
+## Original Audio Control
+You should control the original audio volume for each segment using keyframes. This allows precise volume
+changes within a segment (e.g., fade down audio as speech starts, mute noisy sections).
+
+Each segment includes an "audio" field with a "keyframes" array. Each keyframe:
+- "time": seconds relative to the segment start (0.0 = beginning of segment)
+- "volume": 0.0 (muted) to 1.0 (full volume)
+- "transition": "immediate" (instant volume change) or "fade" (smooth transition)
+- "fade_duration": seconds for the fade (only required when transition is "fade", 0.1-1.0s)
+
+Guidelines for audio decisions:
+- Keep at full (1.0): clip has important, relevant audio that serves the ad (clean dialogue, ambient that sets mood)
+- Reduce (0.2-0.5): segment's original audio is present but will compete with speech/music layered on top
+- Mute (0.0): bad audio quality (noisy/windy/echo), irrelevant background noise, silence is better
+- Fade: use fades for smooth transitions between segments with different audio levels
+- Volume normalization: use the overall_volume from audio analysis to balance clips
+  - "loud" clips: consider starting slightly lower (0.7-0.9) for consistency
+  - "quiet" clips: keep at 1.0 (boosting happens elsewhere if needed)
+  - "medium" clips: default to 1.0
+- First keyframe should always be at time 0.0
+- Segments from clips with has_audio=false should get [{time: 0.0, volume: 0.0, transition: "immediate"}]
+"""
+
+AUDIO_FIELD_WITH = """,
+      "audio": {{"keyframes": [{{"time": 0.0, "volume": <0.0-1.0>, "transition": "immediate|fade", "fade_duration": <optional, 0.1-1.0>}}]}}"""
+AUDIO_FIELD_WITHOUT = ""
+
+AUDIO_RULES_WITH = """- audio.keyframes is required on every segment. At minimum, include one keyframe at time 0.0.
+- volume range: 0.0 (muted) to 1.0 (full). Use audio analysis (overall_volume, audio_quality, has_audio) to decide.
+- For segments from clips with no audio (has_audio=false), use: {"keyframes": [{"time": 0.0, "volume": 0.0, "transition": "immediate"}]}
+- fade_duration is only needed when transition is "fade" (0.1 to 1.0 seconds)."""
+AUDIO_RULES_WITHOUT = ""
+
+
 def _get_genai_client():
     """Get a google-genai client configured for Vertex AI."""
     creds_path = settings.google_application_credentials
@@ -220,7 +328,7 @@ def _get_genai_client():
     return genai.Client(
         vertexai=True,
         project=settings.google_cloud_project,
-        location="us-central1",
+        location="global",
     )
 
 
@@ -279,7 +387,7 @@ def analyze_clip(video_file_path: str, focus: str = "") -> dict:
     client = _get_genai_client()
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=[video_part, prompt],
         )
     except Exception as e:
@@ -323,6 +431,109 @@ def analyze_clip(video_file_path: str, focus: str = "") -> dict:
     return analysis
 
 
+def analyze_clip_audio(video_file_path: str, focus: str = "") -> dict:
+    """Analyze the audio track of a video clip to understand its sound content.
+
+    Use this tool to understand what is in the audio of a video clip before making
+    editing decisions about volume, speech, and music. You should call this for every
+    clip alongside analyze_clip (which covers visuals).
+
+    You can call this multiple times for the same clip with different focus areas if
+    the initial audio analysis is missing information.
+
+    Args:
+        video_file_path: Absolute path to the video file on disk.
+        focus: Optional additional analysis focus. Use this to ask for specific audio
+               details that were missing from a previous analysis (e.g., "listen more
+               closely for background music" or "focus on the speech between seconds
+               5-10"). Leave empty for standard audio analysis.
+
+    Returns:
+        dict: Audio analysis results with status, has_audio, audio_type, volume info,
+              speech content, audio moments, and token usage.
+              On error, returns status="error" with a message.
+    """
+    file_path = Path(video_file_path)
+
+    # Validate file exists
+    if not file_path.exists():
+        return {
+            "status": "error",
+            "message": f"Video file not found: {video_file_path}",
+        }
+
+    # Validate file size
+    file_size = file_path.stat().st_size
+    if file_size > MAX_VIDEO_SIZE_BYTES:
+        return {
+            "status": "error",
+            "message": f"Video file too large: {file_size / 1024 / 1024:.1f}MB. Max: {MAX_VIDEO_SIZE_BYTES / 1024 / 1024:.0f}MB.",
+        }
+
+    # Determine mime type from extension
+    ext = file_path.suffix.lower()
+    mime_map = {".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm"}
+    mime_type = mime_map.get(ext, "video/mp4")
+
+    # Read video bytes
+    video_bytes = file_path.read_bytes()
+    video_part = Part.from_bytes(data=video_bytes, mime_type=mime_type)
+
+    # Build prompt with optional focus
+    additional_focus = ""
+    if focus:
+        additional_focus = f"\nADDITIONAL FOCUS: {focus}\nPay special attention to this aspect in your audio analysis."
+
+    prompt = ANALYZE_CLIP_AUDIO_PROMPT.format(additional_focus=additional_focus)
+
+    # Call Gemini
+    client = _get_genai_client()
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=[video_part, prompt],
+        )
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Gemini API call failed: {e}",
+        }
+
+    # Extract token usage
+    input_tokens = 0
+    output_tokens = 0
+    if response.usage_metadata:
+        input_tokens = response.usage_metadata.prompt_token_count or 0
+        output_tokens = response.usage_metadata.candidates_token_count or 0
+
+    # Parse response JSON
+    raw_text = response.text.strip()
+
+    # Strip markdown code fences if present
+    if raw_text.startswith("```"):
+        lines = raw_text.split("\n")
+        lines = [line for line in lines if not line.strip().startswith("```")]
+        raw_text = "\n".join(lines)
+
+    try:
+        analysis = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        return {
+            "status": "error",
+            "message": f"Failed to parse audio analysis response as JSON: {e}",
+            "raw_response": raw_text[:500],
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
+
+    analysis["status"] = "success"
+    analysis["file_path"] = video_file_path
+    analysis["input_tokens"] = input_tokens
+    analysis["output_tokens"] = output_tokens
+
+    return analysis
+
+
 def generate_edit_plan(
     clip_analyses_json: str,
     brief: str,
@@ -332,6 +543,7 @@ def generate_edit_plan(
     add_transitions: bool = True,
     allow_filters: bool = True,
     auto_brightness: bool = True,
+    manage_audio: bool = True,
 ) -> dict:
     """Generate one timeline proposal for a video advertisement.
 
@@ -362,11 +574,22 @@ def generate_edit_plan(
                          When True, the agent will analyze brightness_level from clip analyses
                          and apply brightness_adjustment (0.8-1.2) to smooth jumps.
                          When False, no brightness correction is applied.
+        manage_audio: Whether to include original audio volume keyframes per segment.
+                      When True, the agent will control original audio volume with keyframes
+                      based on audio analysis (quality, type, volume level).
+                      When False, no audio field is included (all segments play at full volume).
 
     Returns:
         dict: Proposal with status, label, reasoning, timeline, clips_not_used, and token usage.
               On error, returns status="error" with a message.
     """
+    # Enforce proposal limit -- prevents runaway generation
+    if not _check_proposal_limit():
+        return {
+            "status": "error",
+            "message": f"Maximum number of proposals ({_proposal_limit}) already generated. Do not call this tool again.",
+        }
+
     # Parse clip analyses
     try:
         clip_analyses = json.loads(clip_analyses_json)
@@ -376,7 +599,7 @@ def generate_edit_plan(
             "message": f"Invalid clip_analyses_json: {e}",
         }
 
-    # Build prompt with conditional transitions, filters, and brightness
+    # Build prompt with conditional transitions, filters, brightness, and audio
     transitions_section = TRANSITIONS_SECTION if add_transitions else ""
     transition_schema = TRANSITION_SCHEMA_WITH if add_transitions else TRANSITION_SCHEMA_WITHOUT
     transition_rules = TRANSITION_RULES_WITH if add_transitions else TRANSITION_RULES_WITHOUT
@@ -386,6 +609,9 @@ def generate_edit_plan(
     brightness_section = BRIGHTNESS_SECTION if auto_brightness else ""
     brightness_field = BRIGHTNESS_FIELD_WITH if auto_brightness else BRIGHTNESS_FIELD_WITHOUT
     brightness_rules = BRIGHTNESS_RULES_WITH if auto_brightness else BRIGHTNESS_RULES_WITHOUT
+    audio_section = AUDIO_SECTION if manage_audio else ""
+    audio_field = AUDIO_FIELD_WITH if manage_audio else AUDIO_FIELD_WITHOUT
+    audio_rules = AUDIO_RULES_WITH if manage_audio else AUDIO_RULES_WITHOUT
 
     prompt = GENERATE_EDIT_PLAN_PROMPT.format(
         brief=brief,
@@ -402,13 +628,16 @@ def generate_edit_plan(
         brightness_section=brightness_section,
         brightness_field=brightness_field,
         brightness_rules=brightness_rules,
+        audio_section=audio_section,
+        audio_field=audio_field,
+        audio_rules=audio_rules,
     )
 
     # Call Gemini
     client = _get_genai_client()
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=[prompt],
         )
     except Exception as e:
@@ -456,4 +685,508 @@ def generate_edit_plan(
     proposal["input_tokens"] = input_tokens
     proposal["output_tokens"] = output_tokens
 
+    # Only count as generated after successful completion
+    _increment_proposal_count()
+
     return proposal
+
+
+GENERATE_SPEECH_SCRIPT_PROMPT = """You are a voiceover writer for video advertisements. You have a timeline proposal and clip analyses, and you need to write a voiceover script that complements the visuals.
+
+## Creative Brief
+{brief}
+
+## Timeline Proposal
+{timeline_proposal_json}
+
+## Clip Analyses (Video + Audio)
+{clip_analyses_json}
+
+## Voice Settings
+- Voice: {voice_name}
+- Default speaking rate: {speaking_rate}
+
+## Your Task
+Write a voiceover script as chunked speech segments aligned to the timeline. Each chunk is independently rendered as audio.
+
+Return ONLY valid JSON (no markdown, no code fences) with this exact schema:
+{{
+  "speech": [
+    {{
+      "chunk_id": "sp_01",
+      "text": "The actual words to speak",
+      "start_time": <seconds - when this chunk starts in the timeline>,
+      "end_time": <seconds - when this chunk ends in the timeline>,
+      "speaking_rate": <0.5-2.0 - speed for this specific chunk>,
+      "reason": "Brief explanation of why this text fits here"
+    }}
+  ]
+}}
+
+## Rules
+- ALIGN chunks to scene cuts: speech should start/end at or near segment boundaries in the timeline
+- LEAVE GAPS between chunks: let original audio and music breathe. Not every second needs speech.
+- NOT EVERY SEGMENT needs speech: silence is a powerful tool. Use it.
+- COMPLEMENT the visual: describe the feeling or message, do not literally describe what is shown on screen
+- Keep chunks SHORT: 1-3 sentences maximum per chunk
+- chunk_id format: "sp_01", "sp_02", "sp_03", etc. (sequential)
+- start_time and end_time must not overlap with other chunks
+- end_time - start_time should be a reasonable duration for the text (roughly 2-4 words per second at 1.0x rate)
+- speaking_rate: adjust per chunk if needed (0.5-2.0). Use the default rate unless the moment calls for faster/slower delivery.
+  - Energetic moments: slightly faster (1.1-1.3)
+  - Dramatic/emotional moments: slightly slower (0.8-0.9)
+  - Normal narration: 1.0
+- Consider the brief tone:
+  - Energetic brief = punchy, short phrases with pauses between
+  - Calm brief = flowing, longer sentences with gentle pacing
+  - Professional brief = clear, measured delivery
+  - Dramatic brief = varied pacing, building intensity
+- Total speech should cover roughly 30-60%% of the timeline duration (leave 40-70%% for original audio/music/silence)
+- If clip audio analysis shows important dialogue or music, leave that segment without voiceover
+- Return ONLY valid JSON, nothing else"""
+
+
+def generate_speech_script(
+    clip_analyses_json: str,
+    timeline_proposal_json: str,
+    brief: str,
+    voice_name: str = "en-US-Journey-D",
+    speaking_rate: float = 1.0,
+    speech_context: str = "",
+) -> dict:
+    """Generate a voiceover script aligned to a timeline proposal.
+
+    Writes chunked speech that complements the visuals in the timeline.
+    Each chunk is independently renderable as TTS audio.
+
+    Call this ONLY when voiceover is enabled in settings. Call it once per proposal
+    that you want to add voiceover to.
+
+    Args:
+        clip_analyses_json: JSON string of all clip analyses (video + audio data).
+        timeline_proposal_json: JSON string of the timeline proposal to write speech for.
+        brief: The creative brief for tone/style guidance.
+        voice_name: Selected TTS voice name (e.g., "en-US-Journey-D").
+        speaking_rate: Default speaking rate (0.5-2.0, 1.0 = normal). Agent may adjust per chunk.
+        speech_context: Optional user-provided notes about what the voiceover should say.
+                        May include key points to cover, exact phrases to use verbatim,
+                        tone guidance, or ordering hints. Use as primary content guide when provided.
+
+    Returns:
+        dict: Speech script with status and speech array of chunks.
+              On error, returns status="error" with a message.
+    """
+    # Validate inputs
+    try:
+        clip_analyses = json.loads(clip_analyses_json)
+    except json.JSONDecodeError as e:
+        return {
+            "status": "error",
+            "message": f"Invalid clip_analyses_json: {e}",
+        }
+
+    try:
+        timeline_proposal = json.loads(timeline_proposal_json)
+    except json.JSONDecodeError as e:
+        return {
+            "status": "error",
+            "message": f"Invalid timeline_proposal_json: {e}",
+        }
+
+    # Clamp speaking rate
+    speaking_rate = max(0.5, min(2.0, speaking_rate))
+
+    # Build speech context section
+    speech_context_section = ""
+    if speech_context and speech_context.strip():
+        speech_context_section = (
+            f"\n## Speech Notes (from user)\n"
+            f"The user has provided specific notes about what the voiceover should say. "
+            f"Use these as your PRIMARY guide for speech content. If exact phrases are specified, "
+            f"incorporate them verbatim. Align the speech to the visual content -- place relevant "
+            f"phrases over relevant clips.\n\n"
+            f"{speech_context.strip()}\n"
+        )
+
+    # Build prompt
+    prompt = GENERATE_SPEECH_SCRIPT_PROMPT.format(
+        brief=brief,
+        timeline_proposal_json=json.dumps(timeline_proposal, indent=2),
+        clip_analyses_json=json.dumps(clip_analyses, indent=2),
+        voice_name=voice_name,
+        speaking_rate=speaking_rate,
+    )
+
+    # Insert speech context after the brief section
+    if speech_context_section:
+        prompt = prompt.replace(
+            "## Timeline Proposal",
+            f"{speech_context_section}\n## Timeline Proposal",
+        )
+
+    # Call Gemini
+    client = _get_genai_client()
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=[prompt],
+        )
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Gemini API call failed: {e}",
+        }
+
+    # Extract token usage
+    input_tokens = 0
+    output_tokens = 0
+    if response.usage_metadata:
+        input_tokens = response.usage_metadata.prompt_token_count or 0
+        output_tokens = response.usage_metadata.candidates_token_count or 0
+
+    # Parse response JSON
+    raw_text = response.text.strip()
+
+    # Strip markdown code fences if present
+    if raw_text.startswith("```"):
+        lines = raw_text.split("\n")
+        lines = [line for line in lines if not line.strip().startswith("```")]
+        raw_text = "\n".join(lines)
+
+    try:
+        result = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        return {
+            "status": "error",
+            "message": f"Failed to parse speech script response as JSON: {e}",
+            "raw_response": raw_text[:500],
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
+
+    result["status"] = "success"
+    result["input_tokens"] = input_tokens
+    result["output_tokens"] = output_tokens
+
+    return result
+
+
+# --- Background Music (Jamendo) ---
+
+import requests
+
+SELECT_MUSIC_PROMPT = """You are selecting background music for a video advertisement.
+
+## Context
+- Creative brief: {brief}
+- Timeline duration: {timeline_duration} seconds
+- Mood keywords: {mood_keywords}
+{speech_info}
+
+## Available Tracks from Jamendo
+{tracks_json}
+
+## Your Task
+Select the BEST matching track for this video. Consider:
+1. Mood alignment with the brief and visual content
+2. Energy level matching the pacing
+3. Duration (should be >= timeline duration ideally, or at least close)
+4. Genre/tags relevance
+
+Also decide:
+- track_start: How many seconds into the track to begin playback (skip long intros, find a good entry point). Use 0 if the track starts well immediately.
+- reason: A brief explanation of why this track fits.
+
+Return ONLY valid JSON:
+{{
+  "selected_track_index": <0-based index into the tracks array>,
+  "track_start": <seconds into the track to begin>,
+  "reason": "Why this track was selected"
+}}"""
+
+
+def _search_jamendo(mood_keywords: str, duration: float, genre_hint: str = "") -> list[dict]:
+    """Search Jamendo API for tracks matching mood/genre criteria."""
+    client_id = settings.jamendo_client_id
+    if not client_id:
+        return []
+
+    # Build search parameters
+    params = {
+        "client_id": client_id,
+        "format": "json",
+        "limit": 10,
+        "audiodlformat": "mp32",
+        "order": "relevance",
+        "include": "musicinfo",
+        "vocalinstrumental": "instrumental",
+    }
+
+    # Use search param (most reliable for multi-word queries)
+    search_terms = mood_keywords.replace(",", " ").strip()
+    if genre_hint:
+        search_terms = f"{search_terms} {genre_hint}".strip()
+    if search_terms:
+        params["search"] = search_terms
+
+    # Duration filter: prefer tracks at least as long as the timeline
+    min_dur = max(int(duration) - 10, 15)
+    params["duration_between"] = f"{min_dur}_600"
+
+    try:
+        resp = requests.get(
+            "https://api.jamendo.com/v3.0/tracks",
+            params=params,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+
+        # If no results with full search, try with just the first keyword
+        if not results and " " in search_terms:
+            first_keyword = search_terms.split()[0]
+            params["search"] = first_keyword
+            resp = requests.get(
+                "https://api.jamendo.com/v3.0/tracks",
+                params=params,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results", [])
+
+        # Simplify track data for the agent
+        tracks = []
+        for track in results:
+            musicinfo = track.get("musicinfo", {})
+            tags = musicinfo.get("tags", {})
+            # Flatten all tag categories into a single list
+            all_tags = []
+            if isinstance(tags, dict):
+                for tag_list in tags.values():
+                    if isinstance(tag_list, list):
+                        all_tags.extend(tag_list)
+
+            tracks.append({
+                "id": track.get("id"),
+                "name": track.get("name", ""),
+                "artist_name": track.get("artist_name", ""),
+                "duration": track.get("duration", 0),
+                "audio": track.get("audio", ""),
+                "audiodownload": track.get("audiodownload", ""),
+                "tags": all_tags[:10],  # Limit tags for prompt size
+            })
+
+        return tracks
+    except Exception:
+        return []
+
+
+def _build_volume_keyframes(
+    timeline_duration: float,
+    speech_chunks: list[dict],
+    normal_volume: float = 0.5,
+    ducked_volume: float = 0.2,
+    fade_in_duration: float = 1.0,
+    fade_out_duration: float = 2.0,
+    duck_fade: float = 0.4,
+) -> list[dict]:
+    """Build volume keyframes with auto-ducking under speech chunks.
+
+    Creates a volume envelope that:
+    - Fades in at the start
+    - Ducks under speech chunks
+    - Restores between speech
+    - Fades out at the end
+    """
+    keyframes = []
+
+    # Fade in
+    keyframes.append({"time": 0.0, "volume": 0.0, "transition": "fade", "fade_duration": fade_in_duration})
+    keyframes.append({"time": fade_in_duration, "volume": normal_volume, "transition": "fade", "fade_duration": 0.0})
+
+    # Duck under speech chunks
+    if speech_chunks:
+        # Sort chunks by start_time
+        sorted_chunks = sorted(speech_chunks, key=lambda c: c.get("start_time", 0))
+
+        for chunk in sorted_chunks:
+            chunk_start = chunk.get("start_time", 0)
+            chunk_end = chunk.get("end_time", chunk_start + 3.0)
+
+            # Don't duck if the chunk is in the fade-in or fade-out region
+            if chunk_start < fade_in_duration + 0.5:
+                # Already fading in, just set ducked volume at chunk start
+                keyframes.append({"time": max(chunk_start, fade_in_duration), "volume": ducked_volume, "transition": "fade", "fade_duration": duck_fade})
+            else:
+                # Duck before speech starts
+                keyframes.append({"time": chunk_start - duck_fade, "volume": normal_volume, "transition": "fade", "fade_duration": 0.0})
+                keyframes.append({"time": chunk_start, "volume": ducked_volume, "transition": "fade", "fade_duration": duck_fade})
+
+            # Restore after speech ends
+            if chunk_end < timeline_duration - fade_out_duration - 0.5:
+                keyframes.append({"time": chunk_end, "volume": ducked_volume, "transition": "fade", "fade_duration": 0.0})
+                keyframes.append({"time": chunk_end + duck_fade, "volume": normal_volume, "transition": "fade", "fade_duration": duck_fade})
+
+    # Fade out
+    fade_out_start = max(timeline_duration - fade_out_duration, fade_in_duration + 1.0)
+    keyframes.append({"time": fade_out_start, "volume": normal_volume, "transition": "fade", "fade_duration": 0.0})
+    keyframes.append({"time": timeline_duration, "volume": 0.0, "transition": "fade", "fade_duration": fade_out_duration})
+
+    # Remove duplicates and sort by time
+    seen_times = set()
+    unique_keyframes = []
+    for kf in sorted(keyframes, key=lambda k: k["time"]):
+        t = round(kf["time"], 2)
+        if t not in seen_times:
+            seen_times.add(t)
+            kf["time"] = t
+            unique_keyframes.append(kf)
+
+    return unique_keyframes
+
+
+def select_background_music(
+    brief: str,
+    mood_keywords: str,
+    timeline_duration: float,
+    speech_chunks_json: str = "[]",
+    genre_hint: str = "",
+) -> dict:
+    """Select a background music track from Jamendo for the video timeline.
+
+    Searches Jamendo for tracks matching the mood/genre of the brief, then selects
+    the best-fitting track. Automatically generates volume keyframes that duck
+    under speech chunks.
+
+    Call this ONLY when background music is enabled in settings. Call it once per
+    proposal, after generating the edit plan (and speech script if voiceover is enabled).
+
+    Args:
+        brief: The creative brief describing the video's intent and mood.
+        mood_keywords: Comma-separated mood/genre keywords derived from the brief
+                      and visual analysis (e.g., "calm, acoustic, travel, peaceful").
+        timeline_duration: Total duration of the proposal timeline in seconds.
+        speech_chunks_json: JSON string of speech chunks array (from generate_speech_script).
+                          Used to auto-duck music volume during speech. Pass "[]" if no speech.
+        genre_hint: Optional specific genre tag for Jamendo search (e.g., "electronic", "classical").
+
+    Returns:
+        dict: Music selection with placement data and volume keyframes.
+              On error, returns status="error" with a message.
+    """
+    # Parse speech chunks
+    try:
+        speech_chunks = json.loads(speech_chunks_json)
+    except json.JSONDecodeError:
+        speech_chunks = []
+
+    # Search Jamendo
+    tracks = _search_jamendo(mood_keywords, timeline_duration, genre_hint)
+
+    if not tracks:
+        return {
+            "status": "error",
+            "message": "No tracks found on Jamendo matching the criteria. Try different mood_keywords or genre_hint.",
+        }
+
+    # Build speech info for the selection prompt
+    speech_info = ""
+    if speech_chunks:
+        speech_times = ", ".join(
+            f"{c.get('start_time', 0):.1f}-{c.get('end_time', 0):.1f}s"
+            for c in speech_chunks[:10]
+        )
+        speech_info = f"- Speech chunks present at: {speech_times} (music should duck under these)"
+    else:
+        speech_info = "- No speech/voiceover (music can play at consistent volume)"
+
+    # Ask Gemini to select the best track
+    prompt = SELECT_MUSIC_PROMPT.format(
+        brief=brief,
+        timeline_duration=timeline_duration,
+        mood_keywords=mood_keywords,
+        speech_info=speech_info,
+        tracks_json=json.dumps(tracks, indent=2),
+    )
+
+    client = _get_genai_client()
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=[prompt],
+        )
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Gemini API call failed during music selection: {e}",
+        }
+
+    # Parse selection response
+    raw_text = response.text.strip()
+    if raw_text.startswith("```"):
+        lines = raw_text.split("\n")
+        lines = [line for line in lines if not line.strip().startswith("```")]
+        raw_text = "\n".join(lines)
+
+    try:
+        selection = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        return {
+            "status": "error",
+            "message": f"Failed to parse music selection response: {e}",
+            "raw_response": raw_text[:500],
+        }
+
+    # Get the selected track
+    track_index = selection.get("selected_track_index", 0)
+    if track_index < 0 or track_index >= len(tracks):
+        track_index = 0
+
+    selected_track = tracks[track_index]
+    track_start = max(0.0, float(selection.get("track_start", 0)))
+    reason = selection.get("reason", "Best mood match for the brief")
+
+    # Calculate placement
+    track_duration = int(selected_track.get("duration", 0))
+    available_from_start = track_duration - track_start
+    end_time = min(timeline_duration, available_from_start)
+
+    # Build volume keyframes with auto-ducking
+    volume_keyframes = _build_volume_keyframes(
+        timeline_duration=end_time,
+        speech_chunks=speech_chunks,
+    )
+
+    # Build the music result
+    music_data = {
+        "track_id": str(selected_track.get("id", "")),
+        "title": selected_track.get("name", ""),
+        "artist": selected_track.get("artist_name", ""),
+        "url": selected_track.get("audiodownload", "") or selected_track.get("audio", ""),
+        "preview_url": selected_track.get("audio", ""),
+        "duration": track_duration,
+        "tags": selected_track.get("tags", []),
+        "placement": {
+            "start_time": 0.0,
+            "end_time": round(end_time, 2),
+            "track_start": round(track_start, 2),
+        },
+        "volume_keyframes": volume_keyframes,
+        "reason": reason,
+    }
+
+    # Extract token usage
+    input_tokens = 0
+    output_tokens = 0
+    if response.usage_metadata:
+        input_tokens = response.usage_metadata.prompt_token_count or 0
+        output_tokens = response.usage_metadata.candidates_token_count or 0
+
+    return {
+        "status": "success",
+        "music": music_data,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+    }

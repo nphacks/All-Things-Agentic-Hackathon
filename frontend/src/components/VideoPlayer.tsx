@@ -8,6 +8,8 @@ interface VideoPlayerProps {
   proposal: Proposal | null;
   clipUrls: Record<string, string>;
   onTimeUpdate?: (time: number) => void;
+  onPlayStateChange?: (isPlaying: boolean) => void;
+  videoVolume?: number;
   playheadRef?: React.RefObject<HTMLDivElement | null>;
 }
 
@@ -172,7 +174,7 @@ function getFilterCSS(segment: TimelineSegment): string {
   return css;
 }
 
-export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playheadRef }: VideoPlayerProps) {
+export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, onPlayStateChange, videoVolume, playheadRef }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const videosRef = useRef<Map<string, HTMLVideoElement>>(new Map());
@@ -326,7 +328,40 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
       return;
     }
 
-    if (video.paused && isPlayingRef.current) {
+    // If the clip reached its own natural end before hitting segment.end
+    // (the source file is shorter than the segment asks for), treat the
+    // segment as finished instead of replaying the clip from 0.
+    const clipEndedShort = video.ended || (video.duration && video.currentTime >= video.duration - 0.05);
+
+    if (clipEndedShort && video.currentTime < segment.end - 0.15) {
+      const nextIdx = idx + 1;
+      if (nextIdx < timeline.length) {
+        transitionActiveRef.current = false;
+        segmentIdxRef.current = nextIdx;
+        setCurrentSegmentIdx(nextIdx);
+        showSegment(nextIdx);
+        const nextSeg = timeline[nextIdx];
+        const nextUrl = getSegmentUrl(nextSeg);
+        const nextVideo = videosRef.current.get(nextUrl);
+        if (nextVideo) {
+          nextVideo.currentTime = nextSeg.start;
+          nextVideo.play().catch(() => {});
+        }
+        rafRef.current = requestAnimationFrame(() => tickFnRef.current());
+        return;
+      } else {
+        // Last segment and clip ended -- stop playback
+        video.pause();
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+        setTimelineTime(totalDuration);
+        if (onTimeUpdate) onTimeUpdate(totalDuration);
+        return;
+      }
+    }
+
+    // Only resume a paused clip if it hasn't ended (avoid replay-from-0 loop)
+    if (video.paused && isPlayingRef.current && !video.ended) {
       video.play().catch(() => {});
     }
 
@@ -382,7 +417,7 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
       }
 
       // Segment boundary
-      if (video.currentTime >= segEnd - 0.05) {
+      if (video.currentTime >= segEnd - 0.15) {
         video.pause();
         transitionActiveRef.current = false;
         segmentIdxRef.current = nextIdx;
@@ -399,8 +434,8 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
         }
       }
     } else {
-      // Last segment -- check end
-      if (video.currentTime >= segment.end - 0.05) {
+      // Last segment -- check end.
+      if (video.currentTime >= segment.end - 0.15) {
         video.pause();
         isPlayingRef.current = false;
         setIsPlaying(false);
@@ -431,6 +466,24 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, playhead
       }
     };
   }, [isPlaying]);
+
+  // Notify parent of play state changes
+  useEffect(() => {
+    onPlayStateChange?.(isPlaying);
+  }, [isPlaying, onPlayStateChange]);
+
+  // Apply external video volume control
+  useEffect(() => {
+    if (videoVolume === undefined) return;
+    const idx = segmentIdxRef.current;
+    const segment = timeline[idx];
+    if (!segment) return;
+    const url = getSegmentUrl(segment);
+    const video = videosRef.current.get(url);
+    if (video) {
+      video.volume = Math.max(0, Math.min(1, videoVolume));
+    }
+  }, [videoVolume, timeline, getSegmentUrl]);
 
   const togglePlay = () => {
     if (!proposal || !allLoaded) return;
