@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Proposal, TimelineSegment, Transition } from "../types";
 import Loader from "./Loader";
+import TextOverlayLayer from "./TextOverlayLayer";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8080";
 
@@ -606,6 +607,11 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, onPlaySt
           className="absolute inset-0 pointer-events-none z-20"
           style={{ display: "none", opacity: 0 }}
         />
+
+        {/* Text overlays (titles, lower thirds, captions, end cards) */}
+        {proposal?.text_overlays && proposal.text_overlays.length > 0 && (
+          <TextOverlayLayer overlays={proposal.text_overlays} currentTime={timelineTime} />
+        )}
 
         {/* Loading overlay */}
         {!allLoaded && proposal && (

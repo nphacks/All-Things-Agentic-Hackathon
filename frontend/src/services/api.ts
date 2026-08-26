@@ -115,7 +115,7 @@ export interface ProjectListItem {
 export interface Project {
   project_id: string;
   name: string;
-  clips: { clip_id: string; filename: string; gcs_url: string; duration?: number; thumbnail_url?: string }[];
+  clips: { clip_id: string; filename: string; gcs_url: string; duration?: number; thumbnail_url?: string; source?: "upload" | "generated" }[];
   jobs: string[];
   status: string;
   created_at: string | null;
@@ -286,3 +286,5 @@ export async function searchMusicTracks(
   });
   return handleResponse<MusicTrackResult[]>(response);
 }
+
+

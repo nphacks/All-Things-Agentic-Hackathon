@@ -1190,3 +1190,198 @@ def select_background_music(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     }
+
+
+# --- Text Overlays (Captions & Titles) ---
+
+GENERATE_TEXT_OVERLAYS_PROMPT = """You are a motion graphics editor for video advertisements. You have a finished timeline proposal (and optionally a voiceover script), and you decide what on-screen text to add.
+
+## Creative Brief
+{brief}
+
+## Timeline Proposal
+{timeline_proposal_json}
+{speech_section}
+## What You May Add
+{allowed_types_section}
+
+## Text Overlay Types
+- "title" -- a title card. Full-screen or centered headline text. Use for an intro headline or section header. Position: "center".
+- "lower_third" -- text in the lower portion of the frame (names, locations, labels, short factual notes). Position: "lower".
+- "caption" -- transcription/subtitle of spoken words, timed to match speech. Position: "lower".
+- "end_card" -- closing message shown near the end (a call to action, brand name, "Subscribe", "Learn more"). Position: "center" or "lower".
+
+## Your Task
+Decide the on-screen text for this video and return it as a list of overlays. Base your decisions on the brief, the visual timeline, and (if present) the voiceover script.
+
+Return ONLY valid JSON (no markdown, no code fences) with this exact schema:
+{{
+  "text_overlays": [
+    {{
+      "id": "txt_01",
+      "type": "title|lower_third|caption|end_card",
+      "text": "The words shown on screen",
+      "start_time": <seconds - when the overlay appears in the timeline>,
+      "end_time": <seconds - when the overlay disappears>,
+      "position": "center|lower|upper",
+      "style": {{"font_size": "small|medium|large", "color": "#ffffff", "background": "none|semi|solid"}},
+      "animation": "fade|slide|none"
+    }}
+  ]
+}}
+
+## Rules
+- id format: "txt_01", "txt_02", "txt_03", etc. (sequential)
+- start_time and end_time are in TIMELINE seconds (not clip-relative). end_time must be greater than start_time.
+- Keep overlays on screen long enough to read: aim for at least 1.5s, longer for more words (~2-3 words per second of reading time).
+{caption_rules}
+{title_rules}
+- Do NOT overload the screen. Overlays of the same type generally should not overlap in time.
+- position: "center" for titles/end cards, "lower" for lower thirds and captions, "upper" only when the lower area is busy.
+- style.font_size: "large" for titles/end cards, "medium" for lower thirds, "small"-"medium" for captions.
+- style.color: default "#ffffff" (white). Use a readable color; light text over video usually needs a background.
+- style.background: "none" (text only), "semi" (semi-transparent box behind text, best for readability over busy footage), "solid" (opaque box). Prefer "semi" for captions and lower thirds.
+- animation: "fade" (fade in/out), "slide" (slide in), or "none". Titles often "fade", lower thirds often "slide", captions usually "fade" or "none".
+- If there is nothing meaningful to add, return an empty text_overlays array.
+- Return ONLY valid JSON, nothing else"""
+
+
+CAPTION_RULES_ON = """- CAPTIONS: Generate one "caption" overlay per speech chunk. Set text to the chunk's spoken words, start_time to the chunk's start_time, and end_time to the chunk's end_time. Captions must match the speech timing exactly. If the spoken text is long, you may split it across the chunk's time range but keep timing within the chunk."""
+CAPTION_RULES_OFF = """- CAPTIONS: Do NOT generate any "caption" overlays."""
+
+TITLE_RULES_ON = """- TITLES/LOWER THIRDS/END CARDS: You DECIDE where these help. A short intro title over the opening shot, lower thirds for locations or labels when relevant, and an end card near the very end if the brief implies a call to action or brand. Use them sparingly and purposefully -- not every video needs a title, and most do not need lower thirds. Base placement on the visual content and brief."""
+TITLE_RULES_OFF = """- TITLES/LOWER THIRDS/END CARDS: Do NOT generate any "title", "lower_third", or "end_card" overlays."""
+
+
+def generate_text_overlays(
+    timeline_proposal_json: str,
+    brief: str,
+    speech_chunks_json: str = "[]",
+    add_captions: bool = False,
+    add_titles: bool = True,
+) -> dict:
+    """Generate on-screen text overlays (titles, lower thirds, captions, end cards) for a timeline proposal.
+
+    Decides what text to display over the video based on the brief, the timeline, and
+    (optionally) the voiceover script. Captions are generated from speech chunks and timed
+    to match them; titles/lower thirds/end cards are placed by editorial judgment.
+
+    Call this ONLY when captions or titles are enabled in settings. Call it once per proposal,
+    after generating the edit plan (and the speech script if voiceover is enabled, so captions
+    can be timed to the speech).
+
+    Args:
+        timeline_proposal_json: JSON string of the timeline proposal to add text to.
+        brief: The creative brief for tone/style guidance.
+        speech_chunks_json: JSON string of speech chunks array (from generate_speech_script).
+                          Used to generate captions timed to speech. Pass "[]" if no speech.
+        add_captions: Whether to generate captions (subtitles) from the speech chunks.
+                      When True and speech chunks are present, one caption per chunk is created.
+        add_titles: Whether to allow title cards, lower thirds, and end cards.
+                    When True, the agent decides where these enhance the video.
+                    When False, no titles/lower thirds/end cards are generated.
+
+    Returns:
+        dict: Text overlays with status and text_overlays array.
+              On error, returns status="error" with a message.
+    """
+    # Validate inputs
+    try:
+        timeline_proposal = json.loads(timeline_proposal_json)
+    except json.JSONDecodeError as e:
+        return {
+            "status": "error",
+            "message": f"Invalid timeline_proposal_json: {e}",
+        }
+
+    try:
+        speech_chunks = json.loads(speech_chunks_json)
+    except json.JSONDecodeError:
+        speech_chunks = []
+
+    # If nothing is enabled, return empty (agent shouldn't call it, but guard anyway)
+    if not add_captions and not add_titles:
+        return {"status": "success", "text_overlays": []}
+
+    # Captions require speech chunks
+    captions_effective = add_captions and bool(speech_chunks)
+
+    # Build the speech section (only relevant when captions are on and chunks exist)
+    speech_section = ""
+    if captions_effective:
+        speech_section = (
+            "\n## Voiceover Script (for captions)\n"
+            "Generate one caption per chunk below, matching its text and timing exactly.\n"
+            f"{json.dumps(speech_chunks, indent=2)}\n"
+        )
+
+    # Describe what the agent is allowed to add
+    allowed = []
+    if captions_effective:
+        allowed.append("captions (subtitles timed to the voiceover)")
+    if add_titles:
+        allowed.append("titles, lower thirds, and end cards (where they enhance the video)")
+    allowed_types_section = "You may add: " + "; ".join(allowed) + "."
+
+    caption_rules = CAPTION_RULES_ON if captions_effective else CAPTION_RULES_OFF
+    title_rules = TITLE_RULES_ON if add_titles else TITLE_RULES_OFF
+
+    prompt = GENERATE_TEXT_OVERLAYS_PROMPT.format(
+        brief=brief,
+        timeline_proposal_json=json.dumps(timeline_proposal, indent=2),
+        speech_section=speech_section,
+        allowed_types_section=allowed_types_section,
+        caption_rules=caption_rules,
+        title_rules=title_rules,
+    )
+
+    # Call Gemini
+    client = _get_genai_client()
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=[prompt],
+        )
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Gemini API call failed during text overlay generation: {e}",
+        }
+
+    # Extract token usage
+    input_tokens = 0
+    output_tokens = 0
+    if response.usage_metadata:
+        input_tokens = response.usage_metadata.prompt_token_count or 0
+        output_tokens = response.usage_metadata.candidates_token_count or 0
+
+    # Parse response JSON
+    raw_text = response.text.strip()
+
+    # Strip markdown code fences if present
+    if raw_text.startswith("```"):
+        lines = raw_text.split("\n")
+        lines = [line for line in lines if not line.strip().startswith("```")]
+        raw_text = "\n".join(lines)
+
+    try:
+        result = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        return {
+            "status": "error",
+            "message": f"Failed to parse text overlays response as JSON: {e}",
+            "raw_response": raw_text[:500],
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
+
+    overlays = result.get("text_overlays", [])
+    if not isinstance(overlays, list):
+        overlays = []
+
+    return {
+        "status": "success",
+        "text_overlays": overlays,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+    }

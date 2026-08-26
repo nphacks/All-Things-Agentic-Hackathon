@@ -266,6 +266,67 @@ export default function SettingsPanel({ settings, onChange }: SettingsPanelProps
         </button>
       </div>
 
+      {/* Add Titles toggle */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-white/50">Add Titles</span>
+        <button
+          onClick={() => update({ add_titles: !settings.add_titles })}
+          className={`
+            w-10 h-5 rounded-full transition-all relative
+            ${settings.add_titles
+              ? "bg-green-500/40 border border-green-400/50"
+              : "bg-dark-300 border border-white/10"
+            }
+          `}
+          role="switch"
+          aria-checked={settings.add_titles}
+          aria-label="Let the agent add title cards, lower thirds, and end cards"
+        >
+          <div
+            className={`
+              w-3.5 h-3.5 rounded-full absolute top-[2px] transition-all
+              ${settings.add_titles
+                ? "left-[22px] bg-green-400"
+                : "left-[3px] bg-white/30"
+              }
+            `}
+          />
+        </button>
+      </div>
+
+      {/* Add Captions toggle */}
+      <div className="flex items-center justify-between">
+        <div className="flex flex-col">
+          <span className="text-xs text-white/50">Add Captions</span>
+          {settings.add_captions && !settings.add_voiceover && (
+            <span className="text-[10px] text-gold-400/70">Requires voiceover to caption</span>
+          )}
+        </div>
+        <button
+          onClick={() => update({ add_captions: !settings.add_captions })}
+          className={`
+            w-10 h-5 rounded-full transition-all relative
+            ${settings.add_captions
+              ? "bg-green-500/40 border border-green-400/50"
+              : "bg-dark-300 border border-white/10"
+            }
+          `}
+          role="switch"
+          aria-checked={settings.add_captions}
+          aria-label="Generate captions timed to the voiceover"
+        >
+          <div
+            className={`
+              w-3.5 h-3.5 rounded-full absolute top-[2px] transition-all
+              ${settings.add_captions
+                ? "left-[22px] bg-green-400"
+                : "left-[3px] bg-white/30"
+              }
+            `}
+          />
+        </button>
+      </div>
+
       {/* Voiceover toggle */}
       <div className="flex items-center justify-between">
         <span className="text-xs text-white/50">Add Voiceover</span>

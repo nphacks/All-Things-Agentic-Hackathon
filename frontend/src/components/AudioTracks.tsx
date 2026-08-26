@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
-import type { Proposal, Transition, Filter } from "../types";
+import type { Proposal, Transition, Filter, TextOverlay } from "../types";
+import TextOverlayEditPanel from "./TextOverlayEditPanel";
 import Timeline from "./Timeline";
 import MusicPanel from "./MusicPanel";
 import type { MusicSelection, MusicTrack } from "./MusicPanel";
@@ -53,7 +54,18 @@ interface AudioTracksProps {
   onTransitionChange?: (segmentIndex: number, transition: Transition) => void;
   onFilterChange?: (segmentIndex: number, filter: Filter) => void;
   onBrightnessChange?: (segmentIndex: number, brightness: number) => void;
+  // Text overlays track
+  textOverlays?: TextOverlay[];
+  onTextOverlaysChange?: (overlays: TextOverlay[]) => void;
 }
+
+/** Color scheme per overlay type for the text track blocks */
+const OVERLAY_TYPE_COLORS: Record<TextOverlay["type"], { bg: string; border: string; text: string }> = {
+  title: { bg: "bg-amber-500/20", border: "border-amber-400/40", text: "text-amber-200/90" },
+  lower_third: { bg: "bg-teal-500/20", border: "border-teal-400/40", text: "text-teal-200/90" },
+  caption: { bg: "bg-sky-500/20", border: "border-sky-400/40", text: "text-sky-200/90" },
+  end_card: { bg: "bg-pink-500/20", border: "border-pink-400/40", text: "text-pink-200/90" },
+};
 
 /** Render waveform as SVG bars */
 function Waveform({ data, totalDuration, currentTime }: { data: number[]; totalDuration: number; currentTime: number }) {
@@ -286,6 +298,8 @@ export default function AudioTracks({
   onTransitionChange,
   onFilterChange,
   onBrightnessChange,
+  textOverlays = [],
+  onTextOverlaysChange,
 }: AudioTracksProps) {
   const [musicPanelOpen, setMusicPanelOpen] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
@@ -304,6 +318,11 @@ export default function AudioTracks({
   const [editingKfIndex, setEditingKfIndex] = useState<number | null>(null);
   const [kfEditorPos, setKfEditorPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const musicTrackRef = useRef<HTMLDivElement>(null);
+
+  // Text overlay editing state
+  const [editingOverlay, setEditingOverlay] = useState<TextOverlay | null>(null);
+  const [overlayEditorPos, setOverlayEditorPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const textTrackRef = useRef<HTMLDivElement>(null);
 
   // Drag state for speech chunks
   const dragRef = useRef<{ chunkId: string; startX: number; startTime: number } | null>(null);
@@ -603,6 +622,50 @@ export default function AudioTracks({
     commitKeyframes([...musicKeyframes, newKf]);
   };
 
+  // --- Text overlay editing ---
+
+  const handleOverlayClick = (overlay: TextOverlay, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingOverlay(overlay);
+    setOverlayEditorPos({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleOverlayUpdate = (updated: TextOverlay) => {
+    const next = textOverlays.map((o) => (o.id === updated.id ? updated : o));
+    onTextOverlaysChange?.(next);
+    setEditingOverlay(updated);
+  };
+
+  const handleOverlayDelete = (id: string) => {
+    onTextOverlaysChange?.(textOverlays.filter((o) => o.id !== id));
+    setEditingOverlay(null);
+  };
+
+  const handleTextTrackClick = (e: React.MouseEvent) => {
+    if (!textTrackRef.current || !isActive || !onTextOverlaysChange) return;
+    if ((e.target as HTMLElement).closest("[data-text-overlay]")) return;
+
+    const rect = textTrackRef.current.getBoundingClientRect();
+    const clickPct = (e.clientX - rect.left) / rect.width;
+    const startTime = Math.max(0, Math.min(clickPct * totalDuration, totalDuration - 2));
+
+    // Sequential id that avoids collisions with existing ids
+    const newId = `txt_user_${Date.now()}`;
+    const newOverlay: TextOverlay = {
+      id: newId,
+      type: "title",
+      text: "New text",
+      start_time: Math.round(startTime * 10) / 10,
+      end_time: Math.round(Math.min(startTime + 3, totalDuration) * 10) / 10,
+      position: "center",
+      style: { font_size: "large", color: "#ffffff", background: "semi" },
+      animation: "fade",
+    };
+    onTextOverlaysChange([...textOverlays, newOverlay]);
+    setEditingOverlay(newOverlay);
+    setOverlayEditorPos({ x: e.clientX, y: e.clientY });
+  };
+
   return (
     <div className={`rounded-xl p-3 mt-2 ${isActive ? "glass border border-green-500/20" : "glass-light"}`}>
       <div className="text-[10px] text-white/30 mb-2 uppercase tracking-wider">Audio Tracks</div>
@@ -642,6 +705,47 @@ export default function AudioTracks({
                 </div>
               </div>
             )}
+
+            {/* Text Overlays Track */}
+            <div className="flex items-stretch h-10 rounded-lg bg-dark-400/30">
+              <div className="sticky left-0 z-10 w-[120px] flex-shrink-0 bg-dark-400/80 backdrop-blur-sm rounded-l-lg flex items-center pl-2 border-r border-white/5">
+                <span className="text-[10px] text-white/30 w-4 text-center">[T]</span>
+                <span className="text-[10px] text-white/50 truncate ml-1">Text</span>
+              </div>
+              <div
+                ref={textTrackRef}
+                className={`relative px-2 py-1 ${isActive && onTextOverlaysChange ? "cursor-crosshair" : ""}`}
+                style={{ width: `${trackContentWidth}px` }}
+                onClick={handleTextTrackClick}
+              >
+                {textOverlays.length === 0 ? (
+                  <div className="w-full h-full flex items-center text-[9px] text-white/20 pointer-events-none pl-2">
+                    {isActive && onTextOverlaysChange ? "Click to add text" : "No text overlays"}
+                  </div>
+                ) : (
+                  textOverlays.map((overlay) => {
+                    const leftPct = totalDuration > 0 ? (overlay.start_time / totalDuration) * 100 : 0;
+                    const duration = Math.max(0.5, overlay.end_time - overlay.start_time);
+                    const widthPct = totalDuration > 0 ? (duration / totalDuration) * 100 : 5;
+                    const colors = OVERLAY_TYPE_COLORS[overlay.type] || OVERLAY_TYPE_COLORS.title;
+                    return (
+                      <div
+                        key={overlay.id}
+                        data-text-overlay
+                        className={`absolute top-1 bottom-1 rounded ${colors.bg} border ${colors.border} px-1 flex items-center overflow-hidden cursor-pointer hover:brightness-125 transition-all`}
+                        style={{ left: `${leftPct}%`, width: `${widthPct}%`, minWidth: "24px" }}
+                        title={`[${overlay.type}] ${overlay.text}`}
+                        onClick={(e) => handleOverlayClick(overlay, e)}
+                      >
+                        <span className={`text-[8px] ${colors.text} truncate leading-tight pointer-events-none`}>
+                          {overlay.text}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
 
             {/* Original Audio Track */}
             <div className="flex items-stretch h-10 rounded-lg bg-dark-400/30">
@@ -882,6 +986,18 @@ export default function AudioTracks({
           onChange={handleKeyframeVolumeChange}
           onDelete={handleKeyframeDelete}
           onClose={() => setEditingKfIndex(null)}
+        />
+      )}
+
+      {/* Text Overlay Edit Panel */}
+      {editingOverlay && (
+        <TextOverlayEditPanel
+          overlay={editingOverlay}
+          position={overlayEditorPos}
+          totalDuration={totalDuration}
+          onUpdate={handleOverlayUpdate}
+          onDelete={handleOverlayDelete}
+          onClose={() => setEditingOverlay(null)}
         />
       )}
     </div>

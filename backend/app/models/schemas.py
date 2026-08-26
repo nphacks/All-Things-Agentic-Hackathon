@@ -35,6 +35,8 @@ class JobSettings(BaseModel):
     speaking_rate: float = 1.0
     speech_context: str = ""
     add_background_music: bool = True
+    add_captions: bool = False
+    add_titles: bool = True
 
 
 class JobCreateRequest(BaseModel):

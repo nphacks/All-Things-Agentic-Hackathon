@@ -29,6 +29,7 @@ from app.services.firestore import (
     store_music_data,
     store_proposals,
     store_speech_data,
+    store_text_overlays,
     update_job_status,
 )
 from app.services.gcs_storage import download_clip
@@ -191,6 +192,22 @@ def _build_user_message(brief: str, clip_paths: list[str], settings_dict: dict) 
     else:
         music_text = "Background Music: DISABLED -- do NOT call select_background_music."
 
+    add_captions = settings_dict.get("add_captions", False)
+    add_titles = settings_dict.get("add_titles", True)
+    text_overlays_text = ""
+    if add_captions or add_titles:
+        cap_state = "ENABLED" if add_captions else "DISABLED"
+        title_state = "ENABLED" if add_titles else "DISABLED"
+        text_overlays_text = (
+            f"Text Overlays: after generating proposals (and speech scripts if voiceover is enabled), "
+            f"call generate_text_overlays for EACH proposal. Pass the proposal's timeline JSON, the brief, "
+            f"and speech_chunks_json (the JSON array of speech chunks for that proposal, or '[]' if no voiceover). "
+            f"Set add_captions={str(add_captions).lower()} (captions are {cap_state}) and "
+            f"add_titles={str(add_titles).lower()} (titles/lower thirds/end cards are {title_state})."
+        )
+    else:
+        text_overlays_text = "Text Overlays: DISABLED -- do NOT call generate_text_overlays."
+
     return f"""I need you to create ad proposals for me.
 
 Creative brief: {brief}
@@ -203,6 +220,7 @@ Number of proposals: {num_proposals}
 {audio_text}
 {voiceover_text}
 {music_text}
+{text_overlays_text}
 
 Clip file paths to analyze:
 {clip_list}
@@ -279,10 +297,12 @@ async def run_agent_job(
         proposals_generated = 0
         speech_scripts_generated = 0
         music_selections = 0
+        text_overlays_generated = 0
         clip_analyses = {}
         proposals = []
         speech_scripts = []  # list of speech chunk arrays, one per proposal
         music_data = []  # list of music selection dicts, one per proposal
+        text_overlays_data = []  # list of text overlay arrays, one per proposal
         edit_log = []  # AI edit log entries
         switched_to_generating = False
         final_text = ""
@@ -456,6 +476,31 @@ async def run_agent_job(
                             progress=f"Selected background music {music_selections} of {num_proposals}"
                         )
 
+                    # Track generate_text_overlays completions
+                    elif fr.name == "generate_text_overlays" and status == "success":
+                        text_overlays_generated += 1
+                        overlays = response_data.get("text_overlays", [])
+                        text_overlays_data.append(overlays)
+
+                        # Edit log entry
+                        type_counts = {}
+                        for ov in overlays:
+                            t = ov.get("type", "text")
+                            type_counts[t] = type_counts.get(t, 0) + 1
+                        summary_parts = [f"{n} {t}" for t, n in type_counts.items()]
+                        edit_log.append({
+                            "action": "generated_text_overlays",
+                            "summary": f"{len(overlays)} overlays for proposal {text_overlays_generated}"
+                            + (f" ({', '.join(summary_parts)})" if summary_parts else ""),
+                        })
+
+                        logger.info(f"[Job {job_id}] Text overlays generated ({text_overlays_generated}): {len(overlays)} overlays")
+
+                        update_job_status(
+                            job_id, "generating",
+                            progress=f"Generated text overlays {text_overlays_generated} of {num_proposals}"
+                        )
+
                     # Log tool errors
                     elif status == "error":
                         msg = response_data.get("message", "unknown error")
@@ -537,6 +582,11 @@ async def run_agent_job(
                             music_result = response_data.get("music", {})
                             music_data.append(music_result)
 
+                        # Track text overlays in follow-up
+                        elif fr.name == "generate_text_overlays" and response_data.get("status") == "success":
+                            text_overlays_generated += 1
+                            text_overlays_data.append(response_data.get("text_overlays", []))
+
         # Store final proposals and mark complete
         if proposals:
             try:
@@ -600,6 +650,15 @@ async def run_agent_job(
                     except Exception as e:
                         logger.warning(f"[Job {job_id}] Failed to store music for proposal {idx}: {e}")
 
+        # Store text overlays in Firestore per proposal
+        if text_overlays_data:
+            for idx, overlays in enumerate(text_overlays_data):
+                if idx < len(proposals):
+                    try:
+                        store_text_overlays(job_id, idx, sanitize_for_firestore(overlays))
+                    except Exception as e:
+                        logger.warning(f"[Job {job_id}] Failed to store text overlays for proposal {idx}: {e}")
+
         # Store edit log
         if edit_log:
             try:
@@ -607,7 +666,7 @@ async def run_agent_job(
             except Exception as e:
                 logger.warning(f"[Job {job_id}] Failed to store edit log: {e}")
 
-        logger.info(f"[Job {job_id}] Completed -- {clips_analyzed} clips, {len(proposals)} proposals, {len(speech_scripts)} speech scripts, {len(music_data)} music selections")
+        logger.info(f"[Job {job_id}] Completed -- {clips_analyzed} clips, {len(proposals)} proposals, {len(speech_scripts)} speech scripts, {len(music_data)} music selections, {len(text_overlays_data)} text overlay sets")
 
         update_job_status(
             job_id, "completed",

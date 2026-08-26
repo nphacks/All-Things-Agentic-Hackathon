@@ -121,6 +121,7 @@ def add_clip_to_project(
     gcs_url: str,
     duration: Optional[float] = None,
     thumbnail_url: Optional[str] = None,
+    source: str = "upload",
 ) -> Optional[dict[str, Any]]:
     """Add a clip entry to a project's clips array.
 
@@ -147,6 +148,7 @@ def add_clip_to_project(
         "gcs_url": gcs_url,
         "duration": duration,
         "thumbnail_url": thumbnail_url,
+        "source": source,
     }
 
     doc_ref.update({

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import type { JobStatus, Proposal, Transition, Filter } from "../types";
+import type { JobStatus, Proposal, Transition, Filter, TextOverlay } from "../types";
 import VideoPlayer from "./VideoPlayer";
 import Timeline from "./Timeline";
 import AudioTracks from "./AudioTracks";
@@ -258,6 +258,22 @@ export default function EditorView({ job, onNewEdit, projectId }: EditorViewProp
     });
   };
 
+  // Handler for text overlay changes (edit, add, delete)
+  const handleTextOverlaysChange = (proposalIdx: number, overlays: TextOverlay[]) => {
+    setProposals((prev) => {
+      const updated = [...prev];
+      const proposal = { ...updated[proposalIdx] };
+      proposal.text_overlays = overlays;
+      updated[proposalIdx] = proposal;
+      return updated;
+    });
+  };
+
+  // Helper: extract text overlays from proposal
+  const getTextOverlays = (proposal: Proposal): TextOverlay[] => {
+    return Array.isArray(proposal.text_overlays) ? proposal.text_overlays : [];
+  };
+
   // Handler for brightness changes
   const handleBrightnessChange = (proposalIdx: number, segmentIdx: number, brightness: number) => {
     setProposals((prev) => {
@@ -392,6 +408,8 @@ export default function EditorView({ job, onNewEdit, projectId }: EditorViewProp
             onTransitionChange={(segIdx, transition) => handleTransitionChange(selectedIdx, segIdx, transition)}
             onFilterChange={(segIdx, filter) => handleFilterChange(selectedIdx, segIdx, filter)}
             onBrightnessChange={(segIdx, brightness) => handleBrightnessChange(selectedIdx, segIdx, brightness)}
+            textOverlays={getTextOverlays(selectedProposal)}
+            onTextOverlaysChange={(overlays) => handleTextOverlaysChange(selectedIdx, overlays)}
           />
         )}
       </div>

@@ -10,7 +10,7 @@ The ad_cut_agent is an autonomous video editing agent that:
 
 from google.adk.agents import Agent
 
-from app.agent.tools import analyze_clip, analyze_clip_audio, generate_edit_plan, generate_speech_script, select_background_music
+from app.agent.tools import analyze_clip, analyze_clip_audio, generate_edit_plan, generate_speech_script, select_background_music, generate_text_overlays
 
 
 AGENT_INSTRUCTION = """You are an expert video editor agent. Your job is to analyze raw video footage and create compelling advertisement edit proposals.
@@ -56,6 +56,12 @@ AGENT_INSTRUCTION = """You are an expert video editor agent. Your job is to anal
    - Only call this when explicitly told background music is enabled
    - Call this AFTER voiceover generation (if enabled) so ducking is accurate
 
+8. GENERATE TEXT OVERLAYS (if enabled): If captions or titles are enabled in settings, call generate_text_overlays for each proposal:
+   - Pass the proposal's timeline JSON, the brief, and the speech chunks JSON (if voiceover was generated)
+   - The tool decides titles, lower thirds, and end cards when titles are enabled, and generates captions timed to speech when captions are enabled
+   - Only call this when explicitly told captions and/or titles are enabled
+   - Call this AFTER voiceover generation (if enabled) so captions can be timed to the speech chunks
+
 ## Important Rules
 
 - Every clip MUST be analyzed with both analyze_clip AND analyze_clip_audio before generating proposals
@@ -76,9 +82,10 @@ You will receive a message containing:
 - Variation preferences (if any)
 - Voiceover settings (enabled/disabled, voice name, speaking rate)
 - Background music settings (enabled/disabled)
+- Text overlay settings (captions enabled/disabled, titles enabled/disabled)
 - List of clip file paths to analyze
 
-Work through your full workflow and generate all requested proposals. If voiceover is enabled, generate speech scripts for each proposal after generating the edit plans. If background music is enabled, select background music for each proposal (after speech if voiceover is also enabled)."""
+Work through your full workflow and generate all requested proposals. If voiceover is enabled, generate speech scripts for each proposal after generating the edit plans. If background music is enabled, select background music for each proposal (after speech if voiceover is also enabled). If captions or titles are enabled, generate text overlays for each proposal (after voiceover so captions can align to speech)."""
 
 
 # Agent definition
@@ -87,5 +94,5 @@ ad_cut_agent = Agent(
     name="ad_cut_agent",
     description="An autonomous video editing agent that analyzes footage and generates advertisement cut proposals.",
     instruction=AGENT_INSTRUCTION,
-    tools=[analyze_clip, analyze_clip_audio, generate_edit_plan, generate_speech_script, select_background_music],
+    tools=[analyze_clip, analyze_clip_audio, generate_edit_plan, generate_speech_script, select_background_music, generate_text_overlays],
 )

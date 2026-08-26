@@ -55,6 +55,8 @@ export default function ProjectPage() {
     speaking_rate: 1.0,
     speech_context: "",
     add_background_music: true,
+    add_captions: false,
+    add_titles: true,
   });
   const [projectName, setProjectName] = useState("Untitled Project");
   const [jobId, setJobId] = useState<string | null>(null);
@@ -87,6 +89,7 @@ export default function ProjectPage() {
           file_path: `gcs://${id}/${c.clip_id}_${c.filename}`,
           size_bytes: 0,
           gcs_url: c.gcs_url,
+          source: c.source === "generated" ? "generated" : "upload",
         }));
         setClips(clipMetas);
       }

@@ -167,6 +167,153 @@ def _build_volume_filter(keyframes: list[dict], total_duration: float) -> str:
     return f"volume='{combined}':eval=frame"
 
 
+# Output video dimensions (segments are scaled/padded to this in the trim step)
+_OUT_WIDTH = 1280
+_OUT_HEIGHT = 720
+
+# Font size in pixels per style size, tuned for 720p output
+_FONT_SIZE_PX = {"small": 28, "medium": 40, "large": 64}
+
+
+def _find_font_file() -> Optional[str]:
+    """Locate a usable TTF/OTF font for drawtext. Returns None to let ffmpeg use its default."""
+    candidates = [
+        # Linux (Docker image -- Debian/Ubuntu with fonts-dejavu)
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        # macOS (local dev)
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _escape_drawtext(text: str) -> str:
+    """Escape a string for use in an ffmpeg drawtext `text=` value (single-quoted)."""
+    # Order matters: backslash first
+    text = text.replace("\\", "\\\\")
+    text = text.replace(":", "\\:")
+    text = text.replace("'", "\u2019")  # replace apostrophe with typographic to avoid quoting hell
+    text = text.replace("%", "\\%")
+    # Newlines -> spaces (drawtext single line)
+    text = text.replace("\n", " ").replace("\r", " ")
+    return text
+
+
+def _hex_to_ffmpeg_color(color: str) -> str:
+    """Normalize a hex color (#rrggbb) to ffmpeg's 0xRRGGBB form. Falls back to white."""
+    if not color:
+        return "white"
+    c = color.strip()
+    if c.startswith("#") and len(c) == 7:
+        return f"0x{c[1:]}"
+    # Named colors pass through (ffmpeg supports many)
+    return c
+
+
+def _build_drawtext_filter(overlay: dict, font_file: Optional[str]) -> Optional[str]:
+    """Build a single ffmpeg drawtext filter clause for one text overlay."""
+    text = overlay.get("text", "")
+    if not text or not str(text).strip():
+        return None
+
+    start = float(overlay.get("start_time", 0) or 0)
+    end = float(overlay.get("end_time", 0) or 0)
+    if end <= start:
+        return None
+
+    style = overlay.get("style", {}) or {}
+    size = _FONT_SIZE_PX.get(style.get("font_size", "medium"), 40)
+    color = _hex_to_ffmpeg_color(style.get("color", "#ffffff"))
+    background = style.get("background", "none")
+    position = overlay.get("position", "lower")
+
+    # Horizontal: centered
+    x_expr = "(w-text_w)/2"
+
+    # Vertical position by placement
+    if position == "center":
+        y_expr = "(h-text_h)/2"
+    elif position == "upper":
+        y_expr = "h*0.12"
+    else:  # lower
+        y_expr = "h*0.82"
+
+    parts = [f"text='{_escape_drawtext(str(text))}'"]
+    if font_file:
+        # Escape the fontfile path for the filter (colons/spaces handled by quoting the value)
+        ff = font_file.replace("\\", "\\\\").replace(":", "\\:")
+        parts.append(f"fontfile='{ff}'")
+    parts.append(f"fontsize={size}")
+    parts.append(f"fontcolor={color}")
+    parts.append(f"x={x_expr}")
+    parts.append(f"y={y_expr}")
+
+    # Background box for readability
+    if background == "solid":
+        parts.append("box=1")
+        parts.append("boxcolor=black@0.85")
+        parts.append("boxborderw=16")
+    elif background == "semi":
+        parts.append("box=1")
+        parts.append("boxcolor=black@0.5")
+        parts.append("boxborderw=12")
+    else:
+        # No box -- add a shadow for legibility over video
+        parts.append("shadowcolor=black@0.8")
+        parts.append("shadowx=2")
+        parts.append("shadowy=2")
+
+    # Timing
+    parts.append(f"enable='between(t,{start:.3f},{end:.3f})'")
+
+    return "drawtext=" + ":".join(parts)
+
+
+def _burn_text_overlays(
+    video_file: str,
+    text_overlays: list[dict],
+    temp_dir: str,
+) -> str:
+    """Burn text overlays into the video using stacked drawtext filters.
+
+    Applied to the video-only track before audio mux (mux uses -c:v copy).
+    Returns the path to the new video, or the original if nothing was burned.
+    """
+    if not text_overlays:
+        return video_file
+
+    font_file = _find_font_file()
+    clauses = []
+    for overlay in text_overlays:
+        clause = _build_drawtext_filter(overlay, font_file)
+        if clause:
+            clauses.append(clause)
+
+    if not clauses:
+        return video_file
+
+    filter_chain = ",".join(clauses)
+    output = os.path.join(temp_dir, "with_text.mp4")
+
+    cmd = [
+        "ffmpeg", "-y", "-i", video_file,
+        "-vf", filter_chain,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+        "-pix_fmt", "yuv420p", "-an", output,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        # If burning fails, fall back to the un-texted video (don't break export)
+        return video_file
+    return output
+
+
 def _build_original_audio(
     timeline: list[dict],
     clip_map: dict[str, str],
@@ -503,6 +650,11 @@ def export_proposal(
             final_output = segment_files[0]
         else:
             final_output = _apply_transitions(segment_files, timeline, temp_dir)
+
+        # Step 3b: Burn text overlays into the video (before audio mux, which uses -c:v copy)
+        text_overlays = proposal.get("text_overlays", [])
+        if text_overlays:
+            final_output = _burn_text_overlays(final_output, text_overlays, temp_dir)
 
         # Step 4: Build audio layers
         total_duration = proposal.get("total_duration", 0)

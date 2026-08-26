@@ -261,6 +261,32 @@ def store_music_data(job_id: str, proposal_index: int, music: dict[str, Any]) ->
         })
 
 
+def store_text_overlays(job_id: str, proposal_index: int, text_overlays: list[dict]) -> None:
+    """Store text overlays (titles, captions, lower thirds, end cards) for a proposal.
+
+    Stored under proposals[proposal_index].text_overlays in Firestore.
+
+    Args:
+        job_id: Job identifier.
+        proposal_index: Index of the proposal in the proposals array.
+        text_overlays: Array of text overlay dicts (id, type, text, start_time, end_time, etc.).
+    """
+    db = get_db()
+    doc_ref = db.collection(JOBS_COLLECTION).document(job_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        return
+
+    data = doc.to_dict()
+    proposals = data.get("proposals", [])
+    if proposal_index < len(proposals):
+        proposals[proposal_index]["text_overlays"] = sanitize_for_firestore(text_overlays)
+        doc_ref.update({
+            "proposals": proposals,
+            "updated_at": datetime.now(timezone.utc),
+        })
+
+
 def store_edit_log(job_id: str, edit_log: list[dict[str, Any]]) -> None:
     """Store the AI edit log for a job.
 

@@ -5,6 +5,7 @@ export interface ClipMetadata {
   file_path: string;
   size_bytes: number;
   gcs_url?: string;
+  source?: "upload" | "generated";
 }
 
 /** Settings for a job */
@@ -22,6 +23,8 @@ export interface JobSettings {
   speaking_rate: number;
   speech_context: string;
   add_background_music: boolean;
+  add_captions: boolean;
+  add_titles: boolean;
 }
 
 /** A single segment in a clip analysis */
@@ -96,6 +99,25 @@ export interface TimelineSegment {
   audio?: SegmentAudio;
 }
 
+/** Style for a text overlay */
+export interface TextOverlayStyle {
+  font_size: "small" | "medium" | "large";
+  color: string;
+  background: "none" | "semi" | "solid";
+}
+
+/** On-screen text overlay (title, lower third, caption, end card) */
+export interface TextOverlay {
+  id: string;
+  type: "title" | "lower_third" | "caption" | "end_card";
+  text: string;
+  start_time: number;
+  end_time: number;
+  position: "center" | "lower" | "upper";
+  style: TextOverlayStyle;
+  animation: "fade" | "slide" | "none";
+}
+
 /** A generated proposal */
 export interface Proposal {
   label: string;
@@ -104,6 +126,7 @@ export interface Proposal {
   timeline: TimelineSegment[];
   clips_not_used: string[];
   clips_not_used_reason: string;
+  text_overlays?: TextOverlay[];
   status?: string;
   input_tokens?: number;
   output_tokens?: number;
