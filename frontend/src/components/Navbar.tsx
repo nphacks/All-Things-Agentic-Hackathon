@@ -30,7 +30,7 @@ export default function Navbar({ projectName, onProjectNameChange, rightContent 
           className="text-green-400 font-semibold text-sm tracking-tight whitespace-nowrap hover:text-green-300 transition-colors"
           title="Back to projects"
         >
-          Ad Cut Agent
+          Cutting
         </Link>
 
         {/* Divider */}

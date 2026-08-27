@@ -54,7 +54,7 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen flex flex-col pt-20">
-      <Navbar projectName="Ad Cut Agent" onProjectNameChange={() => {}} />
+      <Navbar projectName="Cutting" onProjectNameChange={() => {}} />
 
       <main className="flex-1 px-8 py-8 max-w-5xl mx-auto w-full">
         {/* Header */}

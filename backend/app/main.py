@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 app = FastAPI(
-    title="Ad Cut Agent API",
+    title="Cutting API",
     description="AI video editing agent that generates cut proposals from raw clips and a creative brief.",
     version="0.1.0",
 )
@@ -41,4 +41,4 @@ app.include_router(generate.router)
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    return HealthResponse(status="ok", service="ad-cut-agent")
+    return HealthResponse(status="ok", service="cutting")
