@@ -42,6 +42,7 @@ class ProjectListItem(BaseModel):
     status: str = "active"
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
 
 @router.post("", response_model=ProjectResponse)
@@ -64,6 +65,7 @@ async def list_projects_endpoint():
             status=p.get("status", "active"),
             created_at=str(p["created_at"]) if p.get("created_at") else None,
             updated_at=str(p["updated_at"]) if p.get("updated_at") else None,
+            thumbnail_url=p["clips"][0].get("gcs_url") if p.get("clips") else None,
         )
         for p in projects
     ]

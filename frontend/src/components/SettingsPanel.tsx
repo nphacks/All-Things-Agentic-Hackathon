@@ -405,7 +405,6 @@ export default function SettingsPanel({ settings, onChange }: SettingsPanelProps
             />
             <div className="flex justify-between text-[10px] text-white/30">
               <span>0.5x</span>
-              <span>1.0x</span>
               <span>2.0x</span>
             </div>
           </div>

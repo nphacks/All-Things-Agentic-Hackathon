@@ -1,6 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClipMetadata } from "../types";
-import { uploadClips } from "../services/api";
+import { uploadClips, getClipLibrary, addClipFromLibrary } from "../services/api";
+import type { LibraryClip } from "../services/api";
 import Loader from "./Loader";
 
 interface UploadZoneProps {
@@ -53,7 +54,45 @@ export default function UploadZone({ clips, onClipsUploaded, onRemoveClip, proje
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [activeTab, setActiveTab] = useState<"upload" | "library">("upload");
+  const [library, setLibrary] = useState<LibraryClip[]>([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch library when tab is opened
+  useEffect(() => {
+    if (activeTab === "library" && library.length === 0) {
+      setLibraryLoading(true);
+      getClipLibrary()
+        .then(setLibrary)
+        .catch(() => setLibrary([]))
+        .finally(() => setLibraryLoading(false));
+    }
+  }, [activeTab, library.length]);
+
+  // IDs of clips already in this project
+  const currentClipUrls = new Set(clips.map((c) => c.gcs_url).filter(Boolean));
+
+  function handleAddFromLibrary(libClip: LibraryClip) {
+    if (currentClipUrls.has(libClip.gcs_url)) return;
+    // Register in backend
+    if (projectId) {
+      addClipFromLibrary(projectId, {
+        clip_id: libClip.clip_id,
+        filename: libClip.filename,
+        gcs_url: libClip.gcs_url,
+      }).catch(() => {});
+    }
+    // Optimistic UI update
+    const newClip: ClipMetadata = {
+      clip_id: libClip.clip_id,
+      filename: libClip.filename,
+      file_path: "",
+      size_bytes: 0,
+      gcs_url: libClip.gcs_url,
+    };
+    onClipsUploaded([newClip]);
+  }
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -128,49 +167,129 @@ export default function UploadZone({ clips, onClipsUploaded, onRemoveClip, proje
 
   return (
     <div className="space-y-3">
-      {/* Drop zone */}
-      <div
-        onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onClick={() => inputRef.current?.click()}
-        className={`
-          glass rounded-xl p-6 text-center cursor-pointer transition-all min-h-[160px] flex items-center justify-center
-          ${isDragging ? "border-green-400 bg-green-500/10" : "hover:border-white/15"}
-        `}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-          multiple
-          onChange={onFileSelect}
-          className="hidden"
-        />
-
-        {isUploading ? (
-          <div className="py-2">
-            <Loader size="sm" />
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <div className="text-4xl opacity-40">+</div>
-            <p className="text-sm text-white/70">
-              Drop video clips here or click to browse
-            </p>
-            <p className="text-xs text-white/40">
-              MP4, MOV, or WebM -- max 200MB each, up to 10 clips
-            </p>
-          </div>
-        )}
+      {/* Tab toggle */}
+      <div className="flex gap-1 p-0.5 rounded-lg bg-dark-400/50">
+        <button
+          onClick={() => setActiveTab("upload")}
+          className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+            activeTab === "upload"
+              ? "bg-dark-300 text-white/90"
+              : "text-white/40 hover:text-white/60"
+          }`}
+        >
+          Upload
+        </button>
+        <button
+          onClick={() => setActiveTab("library")}
+          className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+            activeTab === "library"
+              ? "bg-dark-300 text-white/90"
+              : "text-white/40 hover:text-white/60"
+          }`}
+        >
+          Library
+        </button>
       </div>
 
-      {/* Error */}
-      {error && (
-        <p className="text-red-400 text-sm px-1">{error}</p>
+      {/* Upload tab */}
+      {activeTab === "upload" && (
+        <>
+          {/* Drop zone */}
+          <div
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onClick={() => inputRef.current?.click()}
+            className={`
+              glass rounded-xl p-6 text-center cursor-pointer transition-all min-h-[160px] flex items-center justify-center
+              ${isDragging ? "border-green-400 bg-green-500/10" : "hover:border-white/15"}
+            `}
+          >
+            <input
+              ref={inputRef}
+              type="file"
+              accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+              multiple
+              onChange={onFileSelect}
+              className="hidden"
+            />
+
+            {isUploading ? (
+              <div className="py-2">
+                <Loader size="sm" />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="text-4xl opacity-40">+</div>
+                <p className="text-sm text-white/70">
+                  Drop video clips here or click to browse
+                </p>
+                <p className="text-xs text-white/40">
+                  MP4, MOV, or WebM -- max 200MB each, up to 10 clips
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Error */}
+          {error && (
+            <p className="text-red-400 text-sm px-1">{error}</p>
+          )}
+        </>
       )}
 
-      {/* Uploaded clips as cards */}
+      {/* Library tab */}
+      {activeTab === "library" && (
+        <div className="glass rounded-xl p-4 min-h-[160px]">
+          {libraryLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader size="sm" />
+            </div>
+          ) : library.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <p className="text-sm text-white/40">No clips in library yet</p>
+              <p className="text-xs text-white/25 mt-1">Upload clips to any project to build your library</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {library.map((libClip) => {
+                const alreadyAdded = currentClipUrls.has(libClip.gcs_url);
+                return (
+                  <button
+                    key={libClip.clip_id}
+                    onClick={() => handleAddFromLibrary(libClip)}
+                    disabled={alreadyAdded}
+                    className={`rounded-lg p-2 text-left transition-all ${
+                      alreadyAdded
+                        ? "bg-dark-400/30 opacity-50 cursor-default"
+                        : "bg-dark-400/50 hover:bg-dark-300 hover:border-green-400/20 border border-transparent cursor-pointer"
+                    }`}
+                  >
+                    {/* Video thumbnail */}
+                    <div className="w-full h-14 rounded bg-dark-500 overflow-hidden mb-1.5">
+                      <video
+                        src={libClip.gcs_url}
+                        muted
+                        preload="metadata"
+                        className="w-full h-full object-cover"
+                        onLoadedMetadata={(e) => {
+                          e.currentTarget.currentTime = 0.5;
+                        }}
+                      />
+                    </div>
+                    <p className="text-xs text-white/70 truncate">{libClip.filename}</p>
+                    {alreadyAdded && (
+                      <p className="text-[10px] text-green-400/60 mt-0.5">Added</p>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Uploaded clips as cards (always visible below) */}
       {clips.length > 0 && (
         <div className="grid grid-cols-2 gap-2 mt-3">
           {clips.map((clip) => (

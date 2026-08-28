@@ -51,6 +51,39 @@ export async function uploadClips(
   return handleResponse<ClipMetadata[]>(response);
 }
 
+/** Clip from the global media library. */
+export interface LibraryClip {
+  clip_id: string;
+  filename: string;
+  gcs_url: string;
+  duration: number | null;
+  source_project_id: string;
+}
+
+/** Fetch all clips across all projects (global media library). */
+export async function getClipLibrary(): Promise<LibraryClip[]> {
+  const response = await fetch(`${BASE_URL}/clips/library`);
+  return handleResponse<LibraryClip[]>(response);
+}
+
+/** Add a clip from the global library to a project (no re-upload). */
+export async function addClipFromLibrary(
+  projectId: string,
+  clip: { clip_id: string; filename: string; gcs_url: string }
+): Promise<void> {
+  const response = await fetch(`${BASE_URL}/clips/library/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: projectId,
+      clip_id: clip.clip_id,
+      filename: clip.filename,
+      gcs_url: clip.gcs_url,
+    }),
+  });
+  await handleResponse(response);
+}
+
 /** Create a new editing job. Returns immediately with job_id. */
 export async function createJob(
   brief: string,
@@ -110,6 +143,7 @@ export interface ProjectListItem {
   status: string;
   created_at: string | null;
   updated_at: string | null;
+  thumbnail_url: string | null;
 }
 
 export interface Project {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createProject, listProjects } from "../services/api";
+import { createProject, listProjects, updateProject } from "../services/api";
 import type { ProjectListItem } from "../services/api";
 import Navbar from "../components/Navbar";
 import Loader from "../components/Loader";
@@ -38,6 +38,19 @@ export default function LandingPage() {
     }
   }
 
+  async function handleDelete(e: React.MouseEvent, projectId: string) {
+    e.stopPropagation();
+    if (!window.confirm("Delete this project?")) return;
+    // Optimistic removal
+    setProjects((prev) => prev.filter((p) => p.project_id !== projectId));
+    try {
+      await updateProject(projectId, { status: "archived" });
+    } catch {
+      // Reload on failure
+      loadProjects();
+    }
+  }
+
   function formatDate(dateStr: string | null): string {
     if (!dateStr) return "";
     try {
@@ -54,7 +67,7 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen flex flex-col pt-20">
-      <Navbar projectName="Cutting" onProjectNameChange={() => {}} />
+      <Navbar />
 
       <main className="flex-1 px-8 py-8 max-w-5xl mx-auto w-full">
         {/* Header */}
@@ -107,16 +120,40 @@ export default function LandingPage() {
         {!loading && projects.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {projects.map((project) => (
-              <button
+              <div
                 key={project.project_id}
+                className="relative text-left glass rounded-xl p-5 hover:border-green-400/30 hover:bg-white/[0.04] transition-all group cursor-pointer"
                 onClick={() => navigate(`/project/${project.project_id}`)}
-                className="text-left glass rounded-xl p-5 hover:border-green-400/30 hover:bg-white/[0.04] transition-all group"
               >
-                {/* Thumbnail placeholder */}
-                <div className="w-full aspect-video rounded-lg bg-dark-300 mb-3 flex items-center justify-center overflow-hidden">
-                  <svg className="w-8 h-8 text-white/10 group-hover:text-green-400/20 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                {/* Delete button */}
+                <button
+                  onClick={(e) => handleDelete(e, project.project_id)}
+                  className="absolute top-3 right-3 w-7 h-7 rounded-lg bg-dark-300/80 border border-white/5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:border-red-400/40 hover:bg-red-400/10 z-10"
+                  aria-label="Delete project"
+                >
+                  <svg className="w-3.5 h-3.5 text-white/40 hover:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
+                </button>
+
+                {/* Thumbnail */}
+                <div className="w-full aspect-video rounded-lg bg-dark-300 mb-3 flex items-center justify-center overflow-hidden">
+                  {project.thumbnail_url ? (
+                    <video
+                      src={project.thumbnail_url}
+                      muted
+                      preload="metadata"
+                      className="w-full h-full object-cover"
+                      onLoadedMetadata={(e) => {
+                        const video = e.currentTarget;
+                        video.currentTime = 0.5;
+                      }}
+                    />
+                  ) : (
+                    <svg className="w-8 h-8 text-white/10 group-hover:text-green-400/20 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
                 </div>
 
                 {/* Info */}
@@ -136,7 +173,7 @@ export default function LandingPage() {
                     </span>
                   )}
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}

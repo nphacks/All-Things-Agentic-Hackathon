@@ -223,9 +223,6 @@ export default function ProcessingView({
                   )}
                 </span>
               </div>
-
-              {/* Line between 4 and next */}
-              <div className={`w-[2px] h-6 ml-[9px] ${step4 === "completed" ? "bg-green-400" : "bg-white/10"}`} />
             </>
           )}
 
@@ -245,9 +242,6 @@ export default function ProcessingView({
                   )}
                 </span>
               </div>
-
-              {/* Line between 5 and complete */}
-              <div className={`w-[2px] h-6 ml-[9px] ${step5 === "completed" ? "bg-green-400" : "bg-white/10"}`} />
             </>
           )}
 
