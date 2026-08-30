@@ -13,9 +13,55 @@ from app.models.schemas import (
 from app.services.agent_runner import run_agent_job
 from app.services.clip_store import get_clips
 from app.services.firestore import create_job, get_job, update_job_status
-from app.services.projects import add_job_to_project
+from app.services.projects import add_job_to_project, get_project
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+def _file_path_from_gcs_url(gcs_url: str) -> str:
+    """Rebuild the agent's gcs:// file_path from a public GCS URL.
+
+    URL format: https://storage.googleapis.com/{bucket}/projects/{project_id}/clips/{filename}
+    Target:     gcs://{project_id}/{filename}
+    """
+    marker = "/projects/"
+    idx = gcs_url.find(marker)
+    if idx == -1:
+        return ""
+    tail = gcs_url[idx + len(marker):]  # {project_id}/clips/{filename}
+    parts = tail.split("/clips/", 1)
+    if len(parts) != 2:
+        return ""
+    project_id, filename = parts[0], parts[1]
+    return f"gcs://{project_id}/{filename}"
+
+
+def _resolve_clips_from_project(project_id: str, clip_ids: list[str]) -> list[dict]:
+    """Resolve clip metadata from the persistent project record in Firestore.
+
+    Used when clips are not in the in-memory store (library clips, or after a
+    server/instance restart). Returns clip dicts shaped like the in-memory store.
+    """
+    project = get_project(project_id)
+    if not project:
+        return []
+
+    wanted = set(clip_ids)
+    resolved: list[dict] = []
+    for clip in project.get("clips", []):
+        if clip.get("clip_id") not in wanted:
+            continue
+        gcs_url = clip.get("gcs_url", "")
+        file_path = _file_path_from_gcs_url(gcs_url)
+        if not file_path:
+            continue
+        resolved.append({
+            "clip_id": clip.get("clip_id"),
+            "filename": clip.get("filename", "clip.mp4"),
+            "file_path": file_path,
+            "gcs_url": gcs_url,
+        })
+    return resolved
 
 
 @router.post("/create", response_model=JobCreateResponse)
@@ -26,19 +72,30 @@ async def create_job_endpoint(request: JobCreateRequest):
     Returns immediately with job_id and status 'pending'.
     The agent runs asynchronously in the background.
     """
-    # Validate clip_ids exist
+    # Resolve clips from the in-memory store (fast path for just-uploaded clips)
     clips = get_clips(request.clip_ids)
+
+    # Any clip_ids not in memory (e.g. library clips from a prior session, or
+    # after a Cloud Run instance restart) are resolved from the project's
+    # persistent Firestore record instead.
+    found_ids = {c["clip_id"] for c in clips}
+    missing = [cid for cid in request.clip_ids if cid not in found_ids]
+    if missing and request.project_id:
+        resolved = _resolve_clips_from_project(request.project_id, missing)
+        clips.extend(resolved)
+        found_ids = {c["clip_id"] for c in clips}
+        missing = [cid for cid in request.clip_ids if cid not in found_ids]
+
     if not clips:
         raise HTTPException(
             status_code=400,
             detail="No valid clip_ids provided. Upload clips first via POST /clips/upload.",
         )
 
-    missing = set(request.clip_ids) - {c["clip_id"] for c in clips}
     if missing:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown clip_ids: {list(missing)}. Upload clips first.",
+            detail=f"Unknown clip_ids: {missing}. Upload clips first.",
         )
 
     # Use provided settings or defaults

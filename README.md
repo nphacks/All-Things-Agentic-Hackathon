@@ -102,6 +102,39 @@ frontend/           React + Vite app (editor UI, timeline, playback, landing pag
 assets/             Architecture diagram
 ```
 
+## Test an Edit
+
+Try the app end-to-end with a ready-made example:
+
+1. Click **Create New Project** and open the edit form.
+2. In the Media Bin, switch to **Library** and select the 5 historic landmark
+   clips: `historic-1.mp4`, `historic-2.mp4`, `historic-3.mp4`, `historic-4.mp4`,
+   `historic-5.mp4`.
+3. Set the brief and settings below, then click **Generate**.
+
+**Mood Preset:** Custom
+
+**Brief:**
+> A cinematic showcase of historic world landmarks with on-screen titles naming each place
+
+**Settings:**
+
+| Setting | Value |
+|---------|-------|
+| Duration | min 25s, max 40s |
+| Proposals | 2 |
+| Add Transitions | ON |
+| Allow Filters | ON (subtle cinematic grade) |
+| Auto Brightness | ON (real footage, varied exposure) |
+| Manage Original Audio | ON |
+| Add Background Music | ON (orchestral / epic score) |
+| Add Voiceover | ON |
+| Add Captions | OFF |
+| Add Titles | ON (title cards + lower thirds naming each landmark) |
+
+**Speech Notes:**
+> Say at the beginning: "Welcome to the history."
+
 ## Setup
 
 ### Prerequisites
@@ -183,5 +216,3 @@ For the frontend, build with the deployed backend URL and host the output:
 cd frontend
 VITE_API_URL=https://your-backend.run.app npm run build
 ```
-
-Deploy the `dist/` folder to any static host (Firebase Hosting, Cloud Run, etc.).
