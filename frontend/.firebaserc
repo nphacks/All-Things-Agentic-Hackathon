@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "molten-seat-505917-u0"
+  },
+  "targets": {
+    "molten-seat-505917-u0": {
+      "hosting": {
+        "cutting": [
+          "cutting-app"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

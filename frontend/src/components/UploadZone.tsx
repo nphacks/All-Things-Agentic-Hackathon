@@ -106,6 +106,15 @@ export default function UploadZone({ clips, onClipsUploaded, onRemoveClip, proje
         return;
       }
 
+      // Reject any single clip over 100MB before uploading
+      const MAX_FILE_SIZE_MB = 100;
+      const tooLarge = fileArray.filter((f) => f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
+      if (tooLarge.length > 0) {
+        const names = tooLarge.map((f) => `${f.name} (${(f.size / 1024 / 1024).toFixed(0)}MB)`).join(", ");
+        setError(`These clips exceed the ${MAX_FILE_SIZE_MB}MB limit: ${names}. Please use smaller clips.`);
+        return;
+      }
+
       setError(null);
       setIsUploading(true);
 

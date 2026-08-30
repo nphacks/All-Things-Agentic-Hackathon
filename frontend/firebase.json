@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "site": "cutting-app-844c1",
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

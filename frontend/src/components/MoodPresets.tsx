@@ -58,6 +58,11 @@ const PRESETS: { key: string; label: string; brief: string }[] = [
     label: "Travel Vlog",
     brief: "Exciting travel montage. Mix wide vistas with intimate details. Show the journey -- movement, discovery, variety. Upbeat pacing that makes viewers want to go there.",
   },
+  {
+    key: "advertisement",
+    label: "Advertisement",
+    brief: "Punchy commercial edit. Cut between multiple clips for energy and variety -- showcase the product from different angles. Fast, appealing pacing that builds to a clear call to action. Make every second sell.",
+  },
 ];
 
 export default function MoodPresets({ onSelect }: MoodPresetsProps) {

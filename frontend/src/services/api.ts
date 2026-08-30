@@ -27,28 +27,68 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-/** Upload video clips. Returns metadata for each uploaded clip. */
+interface SignedUrlResponse {
+  clip_id: string;
+  signed_url: string;
+  gcs_url: string;
+  file_path: string;
+  content_type: string;
+}
+
+/** Upload a single clip via signed URL: get URL -> PUT to GCS -> register. */
+async function uploadOneClip(
+  file: File,
+  jobId?: string,
+  projectId?: string
+): Promise<ClipMetadata> {
+  // 1. Ask the backend for a signed upload URL
+  const signedRes = await fetch(`${BASE_URL}/clips/signed-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: file.name,
+      project_id: projectId,
+      job_id: jobId,
+    }),
+  });
+  const signed = await handleResponse<SignedUrlResponse>(signedRes);
+
+  // 2. Upload the file directly to GCS (bypasses Cloud Run's 32MB limit)
+  const putRes = await fetch(signed.signed_url, {
+    method: "PUT",
+    headers: { "Content-Type": signed.content_type },
+    body: file,
+  });
+  if (!putRes.ok) {
+    throw new ApiError(putRes.status, `Direct upload to storage failed for ${file.name}`);
+  }
+
+  // 3. Register the uploaded clip so the pipeline can find it
+  const registerRes = await fetch(`${BASE_URL}/clips/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      clip_id: signed.clip_id,
+      filename: file.name,
+      file_path: signed.file_path,
+      gcs_url: signed.gcs_url,
+      size_bytes: file.size,
+      project_id: projectId,
+      job_id: jobId,
+    }),
+  });
+  return handleResponse<ClipMetadata>(registerRes);
+}
+
+/** Upload video clips directly to GCS via signed URLs. Returns metadata for each. */
 export async function uploadClips(
   files: File[],
   jobId?: string,
   projectId?: string
 ): Promise<ClipMetadata[]> {
-  const formData = new FormData();
-  for (const file of files) {
-    formData.append("files", file);
-  }
-  if (jobId) {
-    formData.append("job_id", jobId);
-  }
-  if (projectId) {
-    formData.append("project_id", projectId);
-  }
-
-  const response = await fetch(`${BASE_URL}/clips/upload`, {
-    method: "POST",
-    body: formData,
-  });
-  return handleResponse<ClipMetadata[]>(response);
+  // Upload all clips in parallel -- each gets its own signed URL and goes
+  // straight to GCS, so there is no combined request size limit.
+  return Promise.all(files.map((file) => uploadOneClip(file, jobId, projectId)));
 }
 
 /** Clip from the global media library. */

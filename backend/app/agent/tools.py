@@ -163,7 +163,8 @@ The total timeline MUST fall within these constraints.
 ## Your Task
 Create ONE timeline proposal that satisfies the brief and creative direction. Think like an experienced editor:
 - Consider pacing, narrative arc, visual flow, and emotional impact
-- You may choose NOT to use clips that don't fit -- this is a real editorial decision
+- Prefer to use variety across the available clips. Intercutting between multiple clips almost always makes a stronger, more dynamic edit than relying on a single clip -- this is especially true for short ads and montages, where cutting between different shots creates energy. Aim to draw from most or all of the available footage.
+- You MAY still choose NOT to use a clip, but only if it genuinely conflicts with the brief (wrong subject, poor quality, clashing mood). Do not skip a usable clip just because one other clip could fill the time on its own.
 - Select the best segments from each clip (you don't have to use the full clip)
 - You MAY use multiple non-contiguous segments from the same clip. For example, use seconds 1-3 and seconds 7-10 from the same source file as separate timeline entries. This is useful when a clip has a strong opening and ending but a weak middle, or when you want to revisit a clip for emphasis.
 - Ensure smooth transitions between segments

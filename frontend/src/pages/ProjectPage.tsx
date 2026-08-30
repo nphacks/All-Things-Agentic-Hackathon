@@ -9,6 +9,7 @@ import {
 } from "../services/api";
 import UploadZone from "../components/UploadZone";
 import BriefInput from "../components/BriefInput";
+import MoodPresets from "../components/MoodPresets";
 import SettingsPanel from "../components/SettingsPanel";
 import GenerateButton from "../components/GenerateButton";
 import ProcessingView from "../components/ProcessingView";
@@ -271,6 +272,9 @@ export default function ProjectPage() {
           {/* Right: Brief + Settings + Generate */}
           <div className="w-3/5 flex flex-col gap-5">
             <h3 className="text-xs uppercase tracking-widest text-white/40 mb-1">Configure</h3>
+
+            {/* Mood presets -- fill the brief with a starting template */}
+            <MoodPresets onSelect={setBrief} />
 
             {/* Brief */}
             <BriefInput value={brief} onChange={setBrief} />

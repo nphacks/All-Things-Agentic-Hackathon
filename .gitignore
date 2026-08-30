@@ -12,6 +12,7 @@ tutorials/
 uploads/
 node_modules/
 frontend/dist/
+frontend/.firebase/
 .vscode/
 .DS_Store
 **/.DS_Store

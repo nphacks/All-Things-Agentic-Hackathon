@@ -1,6 +1,7 @@
 """Clip upload endpoint -- uploads to GCS and registers metadata."""
 
 import uuid
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -8,7 +9,7 @@ from pydantic import BaseModel
 
 from app.models.schemas import ClipMetadata
 from app.services.clip_store import register_clip
-from app.services.gcs_storage import upload_to_gcs
+from app.services.gcs_storage import upload_to_gcs, generate_upload_signed_url
 from app.services.projects import add_clip_to_project, list_projects
 from app.services.storage import (
     ALLOWED_EXTENSIONS,
@@ -82,6 +83,102 @@ async def add_clip_from_library(request: AddFromLibraryRequest):
     if not result:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"status": "ok"}
+
+
+class SignedUrlRequest(BaseModel):
+    filename: str
+    project_id: Optional[str] = None
+    job_id: Optional[str] = None
+
+
+class SignedUrlResponse(BaseModel):
+    clip_id: str
+    signed_url: str
+    gcs_url: str
+    file_path: str
+    content_type: str
+
+
+@router.post("/signed-url", response_model=SignedUrlResponse)
+async def create_signed_upload_url(request: SignedUrlRequest):
+    """Generate a signed URL for uploading a clip directly to GCS.
+
+    The browser PUTs the file straight to GCS using the returned signed_url,
+    bypassing Cloud Run's 32MB request limit. After the upload succeeds, the
+    client calls /clips/register with the returned clip_id + gcs_url + file_path.
+    """
+    filename = request.filename or "clip.mp4"
+
+    # Validate extension
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}.",
+        )
+
+    storage_id = request.project_id or request.job_id or str(uuid.uuid4())
+    clip_id = str(uuid.uuid4())
+    storage_filename = f"{clip_id}_{filename}"
+    content_type = EXTENSION_MIME_MAP.get(ext, "video/mp4")
+
+    try:
+        result = generate_upload_signed_url(storage_id, storage_filename, content_type)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create signed URL: {e}")
+
+    return SignedUrlResponse(
+        clip_id=clip_id,
+        signed_url=result["signed_url"],
+        gcs_url=result["gcs_url"],
+        file_path=f"gcs://{storage_id}/{storage_filename}",
+        content_type=content_type,
+    )
+
+
+class RegisterClipRequest(BaseModel):
+    clip_id: str
+    filename: str
+    file_path: str
+    gcs_url: str
+    size_bytes: int = 0
+    project_id: Optional[str] = None
+    job_id: Optional[str] = None
+
+
+@router.post("/register", response_model=ClipMetadata)
+async def register_uploaded_clip(request: RegisterClipRequest):
+    """Register a clip after it has been uploaded directly to GCS via a signed URL.
+
+    Records the same metadata a backend upload would have recorded, so all
+    downstream pipeline code (analysis, export) sees an identical clip entry.
+    """
+    job_id = request.job_id or str(uuid.uuid4())
+
+    register_clip(
+        clip_id=request.clip_id,
+        filename=request.filename,
+        file_path=request.file_path,
+        size_bytes=request.size_bytes,
+        job_id=job_id,
+        gcs_url=request.gcs_url,
+    )
+
+    if request.project_id:
+        add_clip_to_project(
+            project_id=request.project_id,
+            clip_id=request.clip_id,
+            filename=request.filename,
+            gcs_url=request.gcs_url,
+        )
+
+    return ClipMetadata(
+        clip_id=request.clip_id,
+        filename=request.filename,
+        file_path=request.file_path,
+        size_bytes=request.size_bytes,
+        gcs_url=request.gcs_url,
+    )
 
 
 @router.post("/upload", response_model=list[ClipMetadata])
