@@ -83,3 +83,43 @@ body {
   50% { width: 60%; margin-left: 20%; }
   100% { width: 5%; margin-left: 95%; }
 }
+
+/* Themed scrollbars (metallic green on dark) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #16a34a #1e1e1e;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1e1e1e;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #16a34a;
+  border-radius: 8px;
+  border: 2px solid #1e1e1e;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #22c55e;
+}
+
+::-webkit-scrollbar-corner {
+  background: #1e1e1e;
+}
+
+/* Thin variant (used in panels) */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #15803d;
+  border: none;
+}

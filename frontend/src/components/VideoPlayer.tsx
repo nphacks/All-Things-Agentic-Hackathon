@@ -498,25 +498,35 @@ export default function VideoPlayer({ proposal, clipUrls, onTimeUpdate, onPlaySt
       }
       setIsPlaying(false);
     } else {
+      // Restart from the beginning if we're at the end of the timeline.
+      // Detect end by the last segment being current AND the timeline position
+      // being at/near total duration -- this is robust to clips that ended
+      // short (where video.currentTime never reaches the segment's end value).
       const lastSeg = timeline[timeline.length - 1];
-      if (lastSeg && currentSegmentIdx >= timeline.length - 1) {
-        const url = getSegmentUrl(lastSeg);
-        const video = videosRef.current.get(url);
-        if (video && video.currentTime >= lastSeg.end - 0.1) {
-          setCurrentSegmentIdx(0);
-          segmentIdxRef.current = 0;
-          transitionActiveRef.current = false;
-          const firstSeg = timeline[0];
-          const firstUrl = getSegmentUrl(firstSeg);
-          const firstVideo = videosRef.current.get(firstUrl);
-          if (firstVideo) {
-            showSegment(0);
-            firstVideo.currentTime = firstSeg.start;
-            firstVideo.play().catch(() => {});
-          }
-          setIsPlaying(true);
-          return;
+      const atEnd =
+        currentSegmentIdx >= timeline.length - 1 &&
+        (timelineTime >= totalDuration - 0.5 ||
+          (() => {
+            const v = videosRef.current.get(getSegmentUrl(lastSeg));
+            return !!v && (v.ended || v.currentTime >= lastSeg.end - 0.25);
+          })());
+
+      if (lastSeg && atEnd) {
+        setCurrentSegmentIdx(0);
+        segmentIdxRef.current = 0;
+        transitionActiveRef.current = false;
+        setTimelineTime(0);
+        if (onTimeUpdate) onTimeUpdate(0);
+        const firstSeg = timeline[0];
+        const firstUrl = getSegmentUrl(firstSeg);
+        const firstVideo = videosRef.current.get(firstUrl);
+        if (firstVideo) {
+          showSegment(0);
+          firstVideo.currentTime = firstSeg.start;
+          firstVideo.play().catch(() => {});
         }
+        setIsPlaying(true);
+        return;
       }
 
       const segment = timeline[currentSegmentIdx];
