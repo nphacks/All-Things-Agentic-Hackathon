@@ -738,7 +738,7 @@ def _apply_transitions(
                 # Fallback: re-encode concat
                 cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p", output_file]
-                subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         else:
             # xfade transition
             xfade_name = _get_xfade_name(t_type)
@@ -752,7 +752,7 @@ def _apply_transitions(
                 "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                 "-pix_fmt", "yuv420p", output_file
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
             if result.returncode != 0:
                 # Fallback to simple concat

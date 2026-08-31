@@ -176,6 +176,8 @@ async def _run_export(
             _store_export(job_id, proposal_index, download_url)
 
     except Exception as e:
+        import logging
+        logging.getLogger("exports").error(f"[Export {export_id}] failed: {e}")
         _export_jobs[export_id]["status"] = "failed"
         _export_jobs[export_id]["error"] = str(e)
         _export_jobs[export_id]["progress"] = "Export failed"
