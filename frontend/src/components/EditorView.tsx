@@ -219,6 +219,7 @@ export default function EditorView({ job, onNewEdit, projectId }: EditorViewProp
         proposals[idx] as unknown as Record<string, unknown>,
         job.job_id,
         idx,
+        audioTrackState as unknown as Record<string, unknown>,
       );
       setExportStatus((prev) => ({ ...prev, [idx]: result }));
       // If cached (already exported, no changes), trigger download immediately

@@ -23,6 +23,7 @@ class ExportRequest(BaseModel):
     proposal_index: int = 0
     proposal: Optional[dict[str, Any]] = None
     job_id: Optional[str] = None
+    track_state: Optional[dict[str, Any]] = None
 
 
 class ExportStatusResponse(BaseModel):
@@ -90,8 +91,10 @@ async def start_export(project_id: str, request: ExportRequest):
     if not proposal_data:
         raise HTTPException(status_code=400, detail="No proposal data.")
 
-    # Check if there's already a stored export for this proposal
-    if job_id:
+    # Check if there's already a stored export for this proposal.
+    # Skip the cache when custom mixer settings are supplied, since the stored
+    # export may have been rendered with different volumes.
+    if job_id and not request.track_state:
         stored = _get_stored_export(job_id, request.proposal_index)
         if stored and stored.get("url"):
             return ExportStatusResponse(
@@ -123,7 +126,7 @@ async def start_export(project_id: str, request: ExportRequest):
     }
 
     asyncio.create_task(
-        _run_export(export_id, proposal_data, project_id, clips_info, job_id, request.proposal_index)
+        _run_export(export_id, proposal_data, project_id, clips_info, job_id, request.proposal_index, request.track_state)
     )
 
     return ExportStatusResponse(
@@ -156,6 +159,7 @@ async def _run_export(
     clips_info: list[dict[str, Any]],
     job_id: Optional[str],
     proposal_index: int,
+    track_state: Optional[dict[str, Any]] = None,
 ):
     """Background task to render the export."""
     try:
@@ -164,7 +168,7 @@ async def _run_export(
 
         loop = asyncio.get_event_loop()
         download_url = await loop.run_in_executor(
-            None, export_proposal, proposal, project_id, clips_info,
+            None, export_proposal, proposal, project_id, clips_info, None, track_state,
         )
 
         _export_jobs[export_id]["status"] = "completed"

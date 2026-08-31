@@ -279,6 +279,7 @@ export async function startExport(
   proposal: Record<string, unknown>,
   jobId?: string,
   proposalIndex?: number,
+  trackState?: Record<string, unknown>,
 ): Promise<ExportStatus> {
   const body: Record<string, unknown> = {
     proposal,
@@ -286,6 +287,9 @@ export async function startExport(
   };
   if (jobId) {
     body.job_id = jobId;
+  }
+  if (trackState) {
+    body.track_state = trackState;
   }
 
   const response = await fetch(`${BASE_URL}/projects/${projectId}/export`, {

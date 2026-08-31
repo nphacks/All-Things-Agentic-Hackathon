@@ -549,13 +549,37 @@ def _mix_audio_layers(
     return output
 
 
+def _apply_track_gain(track_path: Optional[str], gain: float, temp_dir: str, label: str) -> Optional[str]:
+    """Apply a scalar volume multiplier to a built audio track.
+
+    Returns a new file with the gain applied, or the original path if gain is
+    ~1.0, or None if the track is None. Used to honor the UI volume sliders.
+    """
+    if not track_path:
+        return None
+    if abs(gain - 1.0) < 0.01:
+        return track_path
+    out = os.path.join(temp_dir, f"{label}_gain.wav")
+    cmd = ["ffmpeg", "-y", "-i", track_path, "-af", f"volume={gain:.3f}",
+           "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2", out]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return out if result.returncode == 0 else track_path
+
+
 def export_proposal(
     proposal: dict[str, Any],
     project_id: str,
     clips_info: list[dict[str, Any]],
     progress_callback: Optional[Any] = None,
+    track_state: Optional[dict[str, Any]] = None,
 ) -> str:
-    """Render a proposal to MP4 and upload to GCS."""
+    """Render a proposal to MP4 and upload to GCS.
+
+    track_state (optional) carries the user's audio mixer settings from the UI:
+    originalMuted/originalVolume, speechMuted/speechVolume, musicMuted/musicVolume.
+    These scale (or silence) each audio layer so the export matches the preview.
+    """
+    ts = track_state or {}
     temp_dir = tempfile.mkdtemp(prefix=f"export_{project_id}_")
 
     try:
@@ -636,7 +660,7 @@ def export_proposal(
             cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                         "-r", "30", "-an", "-pix_fmt", "yuv420p", seg_output])
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
                 raise RuntimeError(f"ffmpeg trim failed seg {i}: {result.stderr[-300:]}")
 
@@ -662,15 +686,30 @@ def export_proposal(
             total_duration = sum(s.get("end", 0) - s.get("start", 0) for s in timeline)
 
         # Original audio (with per-segment volume keyframes)
-        original_audio = _build_original_audio(timeline, clip_map, total_duration, temp_dir)
+        original_audio = None
+        if not ts.get("originalMuted", False):
+            original_audio = _build_original_audio(timeline, clip_map, total_duration, temp_dir)
+            original_audio = _apply_track_gain(
+                original_audio, float(ts.get("originalVolume", 1.0)), temp_dir, "original"
+            )
 
         # Speech audio (voiceover chunks at correct offsets)
-        speech_chunks = proposal.get("speech", [])
-        speech_audio = _build_speech_track(speech_chunks, total_duration, temp_dir)
+        speech_audio = None
+        if not ts.get("speechMuted", False):
+            speech_chunks = proposal.get("speech", [])
+            speech_audio = _build_speech_track(speech_chunks, total_duration, temp_dir)
+            speech_audio = _apply_track_gain(
+                speech_audio, float(ts.get("speechVolume", 1.0)), temp_dir, "speech"
+            )
 
         # Music audio (background track with ducking keyframes)
-        music_data = proposal.get("music", {})
-        music_audio = _build_music_track(music_data, total_duration, temp_dir)
+        music_audio = None
+        if not ts.get("musicMuted", False):
+            music_data = proposal.get("music", {})
+            music_audio = _build_music_track(music_data, total_duration, temp_dir)
+            music_audio = _apply_track_gain(
+                music_audio, float(ts.get("musicVolume", 1.0)), temp_dir, "music"
+            )
 
         # Step 5: Mix all audio layers
         mixed_audio = _mix_audio_layers(original_audio, speech_audio, music_audio, total_duration, temp_dir)
@@ -684,7 +723,7 @@ def export_proposal(
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                 "-shortest", muxed_output
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0:
                 final_output = muxed_output
 
